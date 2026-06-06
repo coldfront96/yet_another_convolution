@@ -190,9 +190,4 @@ impl Vm {
     pub fn output(&self) -> &str {
         &self.output
     }
-
-    /// The values left on the stack when execution finished (useful for tests).
-    pub fn stack(&self) -> &[i64] {
-        &self.stack
-    }
 }

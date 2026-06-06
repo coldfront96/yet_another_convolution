@@ -13,7 +13,7 @@
 //! Instruction reference:
 //! - `0`-`9`      push that digit
 //! - `+ - * / %`  arithmetic (pop b, pop a; forgiving: empty pops as 0,
-//!                division/mod by zero yields 0)
+//!   division/mod by zero yields 0)
 //! - `!`          logical not (0 -> 1, else 0)
 //! - `` ` ``      greater-than (pop b, a; push 1 if a > b else 0)
 //! - `> < ^ v`    set IP direction

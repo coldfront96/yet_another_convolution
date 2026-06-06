@@ -1,0 +1,10 @@
+# A short story that secretly prints "HI!".
+#
+# `say` emits the top of the stack as a character: 72 -> H, 73 -> I, 33 -> !,
+# and 10 -> a newline.
+{prose
+  Take seventy two and say it.
+  Take seventy three and say it.
+  Take thirty three and say it.
+  Take ten and say it.
+}

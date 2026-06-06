@@ -1,0 +1,8 @@
+# The `prose` dialect: code that reads like English.
+#
+# It's postfix -- describe the operands, THEN name the action -- because the
+# stack needs values before an operation can use them. Numbers are spelled out;
+# every other word is narrative filler and is ignored on purpose.
+{prose
+  Take six and seven and multiply them, then show the answer.
+}

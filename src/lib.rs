@@ -95,6 +95,7 @@ pub fn compile(source: &str) -> Result<Vec<Segment>, WildError> {
         let segment = match z.kind.as_str() {
             "stack" => Segment::Ops(zones::stack::lower(&z.body, z.line)?),
             "grid" => Segment::Grid(Grid::parse(&z.body)),
+            "prose" => Segment::Ops(zones::prose::lower(&z.body)),
             other => {
                 return Err(WildError::UnknownDialect {
                     kind: other.to_string(),

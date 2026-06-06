@@ -138,6 +138,61 @@ fn run_program_wrong_key_surfaces_cipher_error() {
     assert_eq!(err, WildError::Cipher(CipherError::WrongKey));
 }
 
+// --- prose dialect ------------------------------------------------------
+
+#[test]
+fn prose_reads_like_english() {
+    let out =
+        run_source("{prose Take six and seven and multiply them, then show the answer.}").unwrap();
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn prose_says_characters() {
+    let out = run_source("{prose Take seventy two and say it. Take seventy three and say it.}")
+        .unwrap();
+    assert_eq!(out, "HI");
+}
+
+#[test]
+fn prose_parses_compound_numbers() {
+    let out = run_source("{prose Take one hundred twenty three and show it.}").unwrap();
+    assert_eq!(out, "123\n");
+}
+
+#[test]
+fn prose_parses_hyphenated_numbers() {
+    let out = run_source("{prose Take forty-two and show it.}").unwrap();
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn prose_parses_negative_numbers() {
+    let out = run_source("{prose Take negative five and show it.}").unwrap();
+    assert_eq!(out, "-5\n");
+}
+
+#[test]
+fn prose_filler_only_is_silent() {
+    let out = run_source("{prose Once upon a time, nothing in particular happened.}").unwrap();
+    assert_eq!(out, "");
+}
+
+#[test]
+fn prose_compound_program() {
+    let out =
+        run_source("{prose Take five and four, add them, duplicate the sum, multiply, and show it.}")
+            .unwrap();
+    assert_eq!(out, "81\n");
+}
+
+#[test]
+fn prose_shares_stack_with_other_dialects() {
+    // A stack zone leaves 40; the prose zone adds 2 and shows -> 42.
+    let out = run_source("{stack 40} {prose Take two and add them and show it.}").unwrap();
+    assert_eq!(out, "42\n");
+}
+
 #[test]
 fn underflow_is_reported() {
     let err = run_source("{stack +}").unwrap_err();
@@ -161,9 +216,9 @@ fn unknown_word_is_reported() {
 
 #[test]
 fn unknown_dialect_is_reported() {
-    let err = run_source("{prose once upon a time}").unwrap_err();
+    let err = run_source("{lambda (+ 1 2)}").unwrap_err();
     match err {
-        WildError::UnknownDialect { kind, .. } => assert_eq!(kind, "prose"),
+        WildError::UnknownDialect { kind, .. } => assert_eq!(kind, "lambda"),
         other => panic!("expected unknown dialect, got {other:?}"),
     }
 }

@@ -33,6 +33,8 @@ cargo run -- examples/hello_grid.wild   # prints: Hello, World!
 cargo run -- examples/grid2d.wild       # a 2D path computing 12
 cargo run -- examples/selfmod.wild      # self-inspecting grid
 cargo run -- examples/secret.wild.enc   # an encoded program, run directly
+cargo run -- examples/prose.wild        # an English sentence that prints 42
+cargo run -- examples/prose_hello.wild  # a short story that prints HI!
 cargo test                              # the pipeline test suite
 ```
 
@@ -101,6 +103,25 @@ The `g`/`p` instructions read and write the grid *while it runs*, so grids are
 genuinely self-modifying code. (`}` can't appear in a grid body — it would close
 the zone.)
 
+### The `prose` dialect (code disguised as English)
+
+A prose zone reads like narrative text, but recognized words drive the same
+stack. It's **postfix** — describe the operands, *then* name the action, because
+the machine needs values before an operation can consume them:
+
+```
+{prose
+  Take six and seven and multiply them, then show the answer.   # prints 42
+}
+```
+
+Numbers are spelled out (`forty-two`, `one hundred twenty three`, optionally
+`negative ...`) and don't use the word "and". Action words: `add`/`plus`,
+`subtract`/`minus`/`less`, `multiply`/`times`, `divide`, `duplicate`/`copy`,
+`drop`/`forget`, `swap`/`exchange`, `print`/`show`/`display`,
+`emit`/`say`/`speak`. **Every other word is narrative filler, ignored on
+purpose** — that's what lets the code read like English.
+
 ### The minimalist core
 
 Everything lowers to ~11 primitive ops (`Push, Add, Sub, Mul, Div, Dup, Drop,
@@ -151,7 +172,7 @@ Each item is a layer that slots onto the existing pipeline without reshaping it:
       runtime
 - [x] **Encoded outer layer** — a keyed cipher wrapper so a `.wild` file on disk
       looks like garbage and only this tool (with the key) can decode and run it
-- [ ] **`prose` dialect** — code that reads like English sentences
+- [x] **`prose` dialect** — code that reads like English sentences
 - [ ] **`lambda` dialect** — a Lisp-like parenthesized surface
 - [ ] **Transpiler backend** — a second backend that emits Python/JS from the
       same core ops, instead of interpreting
@@ -166,6 +187,7 @@ src/
     mod.rs       dialect registry
     stack.rs     the `stack` dialect (surface -> core ops)
     grid.rs      the 2D `grid` dialect (its own interpreter)
+    prose.rs     the `prose` dialect (English sentences -> core ops)
   cipher.rs      the encoded outer layer (keyed XOR + base64, no deps)
   lib.rs         the pipeline (Segment, compile / run_source / run_program)
   main.rs        the `convolution` CLI (run / encode / decode)

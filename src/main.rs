@@ -5,6 +5,7 @@
 //!   convolution run <file.wild>       same as above
 //!   convolution encode <file.wild>    print the encoded form to stdout
 //!   convolution decode <file>         print the decoded source to stdout
+//!   convolution transpile <file>      print an equivalent Python program
 //!
 //! Key resolution (highest precedence first):
 //!   --key <KEY> / -k <KEY>  |  $CONVOLUTION_KEY  |  the built-in default
@@ -14,7 +15,7 @@
 use std::process::ExitCode;
 use std::{env, fs};
 
-use convolution::{cipher, run_program};
+use convolution::{cipher, run_program, transpile_program};
 
 /// Used when neither `--key` nor `$CONVOLUTION_KEY` is provided. Override it for
 /// real secrecy.
@@ -47,7 +48,7 @@ fn main() -> ExitCode {
     // Figure out the command and target file.
     let (command, path) = match positional.as_slice() {
         [file] => ("run", file.as_str()),
-        [cmd, file] if matches!(cmd.as_str(), "run" | "encode" | "decode") => {
+        [cmd, file] if matches!(cmd.as_str(), "run" | "encode" | "decode" | "transpile") => {
             (cmd.as_str(), file.as_str())
         }
         _ => {
@@ -89,6 +90,16 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        "transpile" => match transpile_program(&contents, &key) {
+            Ok(python) => {
+                print!("{python}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::FAILURE
+            }
+        },
         _ => unreachable!("command was validated above"),
     }
 }
@@ -102,6 +113,7 @@ fn print_usage() {
          \x20 convolution run <file.wild>      run explicitly\n\
          \x20 convolution encode <file.wild>   print the encoded form\n\
          \x20 convolution decode <file>        print the decoded source\n\
+         \x20 convolution transpile <file>     print an equivalent Python program\n\
          \n\
          options:\n\
          \x20 -k, --key <KEY>   key for the encoded layer\n\

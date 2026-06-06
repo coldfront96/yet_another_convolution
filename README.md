@@ -37,6 +37,7 @@ cargo run -- examples/prose.wild        # an English sentence that prints 42
 cargo run -- examples/prose_hello.wild  # a short story that prints HI!
 cargo run -- examples/lambda.wild       # nested S-expressions -> 21
 cargo run -- examples/lambda_hello.wild # Lisp that prints HI!
+cargo run -- transpile examples/lambda.wild | python3   # transpile, then run
 cargo test                              # the pipeline test suite
 ```
 
@@ -177,6 +178,26 @@ A wrong key fails loudly (an inner tag is checked) rather than running garbage.
 > as keeping the key secret and no stronger. Perfect for a "for fun" esolang;
 > don't protect anything that actually matters with it.
 
+## The transpiler backend (compile to Python)
+
+The same compiled segments the VM runs can instead be emitted as a
+self-contained Python program that produces identical output:
+
+```sh
+cargo run -- transpile examples/arithmetic.wild        # prints Python to stdout
+cargo run -- transpile examples/arithmetic.wild | python3   # ...and run it
+```
+
+Linear dialects (`stack`/`prose`/`lambda`) become straight-line Python stack
+operations; `grid` zones embed their data and call a faithful Python port of the
+2D interpreter (transpiling dynamic Befunge to static code is impractical, so the
+runtime is embedded). The generated program opens with a small fixed runtime, and
+the grid half of that runtime is only included when the program actually uses a
+grid.
+
+Faithfulness isn't assumed — the test suite transpiles every example, runs the
+output through `python3`, and asserts it matches the interpreter.
+
 ## Roadmap — the full wild vision
 
 Each item is a layer that slots onto the existing pipeline without reshaping it:
@@ -192,8 +213,9 @@ Each item is a layer that slots onto the existing pipeline without reshaping it:
       looks like garbage and only this tool (with the key) can decode and run it
 - [x] **`prose` dialect** — code that reads like English sentences
 - [x] **`lambda` dialect** — a Lisp-like parenthesized surface
-- [ ] **Transpiler backend** — a second backend that emits Python/JS from the
-      same core ops, instead of interpreting
+- [x] **Transpiler backend** — emits a self-contained Python program from the
+      same compiled segments, instead of interpreting (output verified against
+      the interpreter in CI tests)
 
 ## Project layout
 
@@ -208,8 +230,11 @@ src/
     prose.rs     the `prose` dialect (English sentences -> core ops)
     lambda.rs    the `lambda` dialect (Lisp S-expressions -> core ops)
   cipher.rs      the encoded outer layer (keyed XOR + base64, no deps)
-  lib.rs         the pipeline (Segment, compile / run_source / run_program)
-  main.rs        the `convolution` CLI (run / encode / decode)
+  transpile.rs   the Python backend (segments -> a runnable Python program)
+  lib.rs         the pipeline (Segment, compile / run / transpile / run_program)
+  main.rs        the `convolution` CLI (run / encode / decode / transpile)
 examples/        sample .wild programs (+ secret.wild.enc, encoded)
-tests/           end-to-end pipeline tests
+tests/
+  pipeline.rs    end-to-end interpreter tests
+  transpile.rs   transpile-then-run-in-python equivalence tests
 ```

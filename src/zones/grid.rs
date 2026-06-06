@@ -90,6 +90,12 @@ impl Grid {
         }
     }
 
+    /// The normalized grid rows (padded to a common width). Used by the
+    /// transpiler to embed the grid as data in the generated program.
+    pub fn rows(&self) -> Vec<String> {
+        self.cells.iter().map(|row| row.iter().collect()).collect()
+    }
+
     /// Run the grid against the shared VM. The grid is copied internally so the
     /// stored program is reusable even though `p` mutates cells at runtime.
     pub fn run(&self, vm: &mut Vm) -> Result<(), RuntimeError> {

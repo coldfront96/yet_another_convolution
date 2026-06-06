@@ -16,6 +16,7 @@
 
 pub mod cipher;
 pub mod core;
+pub mod transpile;
 pub mod zone;
 pub mod zones;
 
@@ -130,16 +131,33 @@ pub fn run_source(source: &str) -> Result<String, WildError> {
     Ok(vm.output().to_string())
 }
 
-/// Run file contents, transparently peeling off the encoded outer layer first.
+/// Peel off the encoded outer layer if present, returning plaintext source.
 ///
 /// If `contents` is wrapped (starts with the cipher [`MAGIC`](cipher::MAGIC)
-/// marker) it is decoded with `key`; otherwise it runs as plaintext. This is the
-/// entry point the CLI uses so encoded and plain `.wild` files Just Work.
-pub fn run_program(contents: &str, key: &str) -> Result<String, WildError> {
-    let source = if cipher::looks_encoded(contents) {
-        cipher::decode(contents, key)?
+/// marker) it is decoded with `key`; otherwise it is returned unchanged.
+fn unwrap_source(contents: &str, key: &str) -> Result<String, WildError> {
+    if cipher::looks_encoded(contents) {
+        Ok(cipher::decode(contents, key)?)
     } else {
-        contents.to_string()
-    };
-    run_source(&source)
+        Ok(contents.to_string())
+    }
+}
+
+/// Run file contents, transparently peeling off the encoded outer layer first.
+///
+/// This is the entry point the CLI uses so encoded and plain `.wild` files Just
+/// Work.
+pub fn run_program(contents: &str, key: &str) -> Result<String, WildError> {
+    run_source(&unwrap_source(contents, key)?)
+}
+
+/// Transpile plaintext source to a self-contained Python program.
+pub fn transpile(source: &str) -> Result<String, WildError> {
+    let segments = compile(source)?;
+    Ok(transpile::to_python(&segments))
+}
+
+/// Transpile file contents to Python, peeling off the encoded layer first.
+pub fn transpile_program(contents: &str, key: &str) -> Result<String, WildError> {
+    transpile(&unwrap_source(contents, key)?)
 }

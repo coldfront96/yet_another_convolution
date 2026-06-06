@@ -10,6 +10,7 @@
 //! - `dup drop swap over` -> stack shuffles
 //! - `.`              -> print top as a number
 //! - `,`              -> emit top as a character
+//! - `poke`           -> pop `z i c`; rewrite char `i` of a later zone `z` to `c`
 //! - `#` starts a comment that runs to end of line
 
 use crate::core::Op;
@@ -59,6 +60,7 @@ pub fn lower(body: &str, line_base: usize) -> Result<Vec<Op>, StackError> {
                 "over" => Op::Over,
                 "." => Op::Print,
                 "," => Op::Emit,
+                "poke" => Op::Poke,
                 _ => match word.parse::<i64>() {
                     Ok(n) => Op::Push(n),
                     Err(_) => {

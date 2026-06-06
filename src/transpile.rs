@@ -14,10 +14,13 @@
 
 use crate::core::Op;
 use crate::zones::grid::Grid;
-use crate::Segment;
+use crate::{Segment, WildError};
 
 /// Emit a complete, runnable Python program for the given segments.
-pub fn to_python(segments: &[Segment]) -> String {
+///
+/// Fails with [`WildError::Untranspilable`] if a segment uses the cross-zone
+/// rewrite op (`poke`), which static Python can't reproduce.
+pub fn to_python(segments: &[Segment]) -> Result<String, WildError> {
     let needs_grid = segments.iter().any(|s| matches!(s, Segment::Grid(_)));
 
     let mut out = String::new();
@@ -32,7 +35,10 @@ pub fn to_python(segments: &[Segment]) -> String {
         match segment {
             Segment::Ops(ops) => {
                 for op in ops {
-                    for line in op_lines(op) {
+                    let lines = op_lines(op).ok_or(WildError::Untranspilable(
+                        "the program rewrites its own source (`poke`)",
+                    ))?;
+                    for line in lines {
                         out.push_str(&line);
                         out.push('\n');
                     }
@@ -45,14 +51,16 @@ pub fn to_python(segments: &[Segment]) -> String {
         }
     }
 
-    out
+    Ok(out)
 }
 
-/// The Python lines for one linear op. Temporaries `a`/`b` are reused module
-/// globals — harmless, since every op fully consumes them.
-fn op_lines(op: &Op) -> Vec<String> {
+/// The Python lines for one linear op, or `None` for an op with no static Python
+/// equivalent (`Poke`). Temporaries `a`/`b` are reused module globals — harmless,
+/// since every op fully consumes them.
+fn op_lines(op: &Op) -> Option<Vec<String>> {
     let lines: &[&str] = match op {
-        Op::Push(n) => return vec![format!("_push({n})")],
+        Op::Push(n) => return Some(vec![format!("_push({n})")]),
+        Op::Poke => return None,
         Op::Add => &["b = _pop()", "a = _pop()", "_push(_w(a + b))"],
         Op::Sub => &["b = _pop()", "a = _pop()", "_push(_w(a - b))"],
         Op::Mul => &["b = _pop()", "a = _pop()", "_push(_w(a * b))"],
@@ -70,7 +78,7 @@ fn op_lines(op: &Op) -> Vec<String> {
         Op::Print => &["_printnum(_pop())"],
         Op::Emit => &["_emit(_pop())"],
     };
-    lines.iter().map(|s| s.to_string()).collect()
+    Some(lines.iter().map(|s| s.to_string()).collect())
 }
 
 /// A call that runs an embedded grid as data.

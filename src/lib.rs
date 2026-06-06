@@ -23,11 +23,32 @@ pub mod zones;
 use cipher::CipherError;
 use core::{Op, RuntimeError, Vm};
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 use zone::ZoneError;
 use zones::grid::Grid;
 use zones::lambda::LambdaError;
 use zones::stack::StackError;
+
+/// The conventional keyfile name. The CLI discovers it by walking up from a
+/// program's directory, so an encoded `.wild` file only runs where this file
+/// (carried between your own repos) is present.
+pub const KEYFILE_NAME: &str = ".wildkey";
+
+/// Walk up from `start_dir` looking for a [`KEYFILE_NAME`] file, returning the
+/// first one found. This is what makes encoded programs "repo-bound": without
+/// the keyfile somewhere above the program, the right key can't be found.
+pub fn discover_keyfile(start_dir: &Path) -> Option<PathBuf> {
+    let mut dir = Some(start_dir);
+    while let Some(d) = dir {
+        let candidate = d.join(KEYFILE_NAME);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        dir = d.parent();
+    }
+    None
+}
 
 /// One compiled zone. Linear dialects produce [`Segment::Ops`]; the 2D `grid`
 /// dialect produces [`Segment::Grid`], which carries its own interpreter. Both
@@ -49,6 +70,9 @@ pub enum WildError {
     Runtime(RuntimeError),
     /// The encoded outer layer failed to decode (e.g. wrong key).
     Cipher(CipherError),
+    /// The program uses a feature the transpiler can't statically reproduce
+    /// (cross-zone source rewriting). Carries a short reason.
+    Untranspilable(&'static str),
 }
 
 impl fmt::Display for WildError {
@@ -62,6 +86,7 @@ impl fmt::Display for WildError {
             WildError::Lambda(e) => write!(f, "{e}"),
             WildError::Runtime(e) => write!(f, "{e}"),
             WildError::Cipher(e) => write!(f, "{e}"),
+            WildError::Untranspilable(why) => write!(f, "error: cannot transpile: {why}"),
         }
     }
 }
@@ -92,40 +117,72 @@ impl From<RuntimeError> for WildError {
     }
 }
 
-/// Compile a Convolution program into an ordered list of segments.
+/// Compile one zone's `body` (given its `kind` and source `line`) to a segment.
+fn compile_zone(kind: &str, body: &str, line: usize) -> Result<Segment, WildError> {
+    Ok(match kind {
+        "stack" => Segment::Ops(zones::stack::lower(body, line)?),
+        "grid" => Segment::Grid(Grid::parse(body)),
+        "prose" => Segment::Ops(zones::prose::lower(body)),
+        "lambda" => Segment::Ops(zones::lambda::lower(body)?),
+        other => {
+            return Err(WildError::UnknownDialect {
+                kind: other.to_string(),
+                line,
+            })
+        }
+    })
+}
+
+/// Statically compile a program into an ordered list of segments, from the
+/// original source. This is the view the transpiler uses; note it does **not**
+/// reflect any runtime cross-zone rewriting (see [`core::Op::Poke`]).
 ///
 /// Segments execute in source order and share one stack, so values pushed in an
-/// earlier zone (even a different dialect) are visible to a later one — that
-/// cross-zone flow is what lets the dialects genuinely talk to each other.
+/// earlier zone (even a different dialect) are visible to a later one.
 pub fn compile(source: &str) -> Result<Vec<Segment>, WildError> {
-    let zones = zone::split(source)?;
-    let mut segments = Vec::new();
-    for z in zones {
-        let segment = match z.kind.as_str() {
-            "stack" => Segment::Ops(zones::stack::lower(&z.body, z.line)?),
-            "grid" => Segment::Grid(Grid::parse(&z.body)),
-            "prose" => Segment::Ops(zones::prose::lower(&z.body)),
-            "lambda" => Segment::Ops(zones::lambda::lower(&z.body)?),
-            other => {
-                return Err(WildError::UnknownDialect {
-                    kind: other.to_string(),
-                    line: z.line,
-                })
-            }
-        };
-        segments.push(segment);
+    zone::split(source)?
+        .into_iter()
+        .map(|z| compile_zone(&z.kind, &z.body, z.line))
+        .collect()
+}
+
+/// Apply one recorded edit `(zone, offset, char)` to the mutable zone bodies.
+/// Out-of-range targets are ignored (forgiving). Editing an already-run zone has
+/// no effect, since only zones compiled *after* the edit see it.
+fn apply_edit(bodies: &mut [Vec<char>], z: i64, offset: i64, c: i64) {
+    if z < 0 || offset < 0 {
+        return;
     }
-    Ok(segments)
+    if let Some(body) = bodies.get_mut(z as usize) {
+        let offset = offset as usize;
+        if offset < body.len() {
+            if let Some(ch) = u32::try_from(c).ok().and_then(char::from_u32) {
+                body[offset] = ch;
+            }
+        }
+    }
 }
 
 /// Compile and run plaintext source, returning everything it printed.
+///
+/// Zones are compiled and run **one at a time** so that a zone's `poke` edits to
+/// a later zone's source land before that zone is compiled. All zones share one
+/// [`Vm`] (stack + output).
 pub fn run_source(source: &str) -> Result<String, WildError> {
-    let segments = compile(source)?;
+    let zones = zone::split(source)?;
+    let kinds: Vec<String> = zones.iter().map(|z| z.kind.clone()).collect();
+    let lines: Vec<usize> = zones.iter().map(|z| z.line).collect();
+    let mut bodies: Vec<Vec<char>> = zones.iter().map(|z| z.body.chars().collect()).collect();
+
     let mut vm = Vm::new();
-    for segment in &segments {
-        match segment {
-            Segment::Ops(ops) => vm.run_ops(ops)?,
+    for i in 0..kinds.len() {
+        let body: String = bodies[i].iter().collect();
+        match compile_zone(&kinds[i], &body, lines[i])? {
+            Segment::Ops(ops) => vm.run_ops(&ops)?,
             Segment::Grid(grid) => grid.run(&mut vm)?,
+        }
+        for (z, offset, c) in vm.take_edits() {
+            apply_edit(&mut bodies, z, offset, c);
         }
     }
     Ok(vm.output().to_string())
@@ -152,9 +209,12 @@ pub fn run_program(contents: &str, key: &str) -> Result<String, WildError> {
 }
 
 /// Transpile plaintext source to a self-contained Python program.
+///
+/// Fails with [`WildError::Untranspilable`] if the program rewrites its own
+/// source (`poke`), which a static Python program cannot reproduce.
 pub fn transpile(source: &str) -> Result<String, WildError> {
     let segments = compile(source)?;
-    Ok(transpile::to_python(&segments))
+    transpile::to_python(&segments)
 }
 
 /// Transpile file contents to Python, peeling off the encoded layer first.

@@ -1,2 +1,6 @@
 /target
 Cargo.lock
+
+# The private keyfile for the encoded layer. Carry it between your own repos;
+# never commit it, or anyone could decode your programs.
+.wildkey

@@ -1,0 +1,10 @@
+# Cross-zone source rewriting: a zone reaches into a LATER zone and edits its
+# source text before it runs.
+#
+# `poke` pops three values -- zone index, character offset, character code --
+# and rewrites that character in the target zone. Here zone 0 overwrites the
+# `+` in zone 1 (at character offset 5 of its body) with a `*` (code 42).
+#
+# So zone 1 LOOKS like it computes 6 + 7 = 13... but actually prints 42.
+{stack 1 5 42 poke}
+{stack 6 7 + . }

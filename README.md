@@ -37,6 +37,7 @@ cargo run -- examples/prose.wild        # an English sentence that prints 42
 cargo run -- examples/prose_hello.wild  # a short story that prints HI!
 cargo run -- examples/lambda.wild       # nested S-expressions -> 21
 cargo run -- examples/lambda_hello.wild # Lisp that prints HI!
+cargo run -- examples/selfrewrite.wild  # a zone rewrites a later zone -> 42
 cargo run -- transpile examples/lambda.wild | python3   # transpile, then run
 cargo test                              # the pipeline test suite
 ```
@@ -59,6 +60,7 @@ Currently the only dialect is `stack` — a Forth/Brainfuck-flavored surface:
 | `over`              | `a b -> a b a`                           |
 | `.`                 | pop and print as a decimal number        |
 | `,`                 | pop and print as a Unicode character     |
+| `poke`              | pop `z i c`; rewrite a *later* zone's source (see below) |
 | `# ...`             | comment to end of line                   |
 
 ```
@@ -138,13 +140,35 @@ is naturally postfix, so it lowers straight to core ops:
 
 Forms: integer literals push themselves; `(+ ...)` / `(* ...)` / `(- ...)` /
 `(/ ...)` are variadic folds (`(- x)` negates); `(print x)` and `(emit x)`
-output a number or a character; `;` starts a comment. A lambda zone can also
-leave a value on the stack (with no `print`) for a later zone to pick up.
+output a number or a character; `(poke z i c)` rewrites a later zone's source
+(see below); `;` starts a comment. A lambda zone can also leave a value on the
+stack (with no `print`) for a later zone to pick up.
+
+### Cross-zone source rewriting (`poke`)
+
+The grid's `g`/`p` let a zone rewrite *itself*. `poke` goes further: it lets one
+zone reach across and rewrite the **source text of a later zone before it runs**.
+
+`poke` pops three values — a zone index `z`, a character offset `i`, and a
+character code `c` — and sets character `i` of zone `z`'s body to `c`. Because
+edits must land *before* the target compiles, the interpreter compiles and runs
+zones **one at a time** rather than all up front.
+
+```
+{stack 1 5 42 poke}   # write '*' (code 42) over offset 5 of zone 1's body
+{stack 6 7 + . }      # LOOKS like 6 + 7 = 13... but prints 42
+```
+
+The second zone reads like it adds, but the first zone rewrote its `+` into a
+`*` first. Edits to an already-run zone, or to an out-of-range zone, are
+silently ignored — only zones not yet compiled can be changed. (`poke` is the
+one *meta*-op; it manipulates source, not the stack's values.)
 
 ### The minimalist core
 
-Everything lowers to ~11 primitive ops (`Push, Add, Sub, Mul, Div, Dup, Drop,
-Swap, Over, Print, Emit`). New dialects only need to learn how to emit these.
+Everything lowers to ~12 primitive ops (`Push, Add, Sub, Mul, Div, Dup, Drop,
+Swap, Over, Print, Emit`, plus the meta-op `Poke`). New dialects only need to
+learn how to emit these.
 
 ## The encoded outer layer ("only my repos understand it")
 
@@ -163,16 +187,33 @@ cargo run -- run examples/secret.wild.enc        # -> Hello, World!
 cargo run -- decode examples/secret.wild.enc
 ```
 
-The key comes from `--key <KEY>`, else `$CONVOLUTION_KEY`, else a built-in
-default. **Set your own key** to make a program only your tooling (and repos)
-can read:
+A wrong key fails loudly (an inner tag is checked) rather than running garbage.
+
+### Repo-bound: a keyfile you carry between *your* repos
+
+The point isn't one secret key memorized in your head — it's a **keyfile you
+own** that travels with you. Generate one, and encoded programs only run where
+that keyfile is present:
 
 ```sh
-CONVOLUTION_KEY="my-private-key" cargo run -- encode prog.wild > prog.enc
-CONVOLUTION_KEY="my-private-key" cargo run -- run prog.enc
+cargo run -- keygen                       # writes a random .wildkey (gitignored)
+cargo run -- encode prog.wild > prog.enc  # encodes with the discovered .wildkey
+cargo run -- run prog.enc                 # finds .wildkey, decodes, runs
 ```
 
-A wrong key fails loudly (an inner tag is checked) rather than running garbage.
+Drop the same `.wildkey` into another repo of yours and the encoded programs
+work there too. Anyone who clones a repo **without** your keyfile just gets a
+`wrong key` error — the language "breaks" for them, by design. `.wildkey` is
+gitignored so you never commit it by accident, and `keygen` refuses to clobber
+an existing one.
+
+The key is resolved in this order (first match wins):
+
+1. `--key <KEY>` — an explicit key on the command line
+2. `--keyfile <PATH>` — read the key from a specific file
+3. `$CONVOLUTION_KEY` — an environment variable
+4. a `.wildkey` discovered by walking up from the program's directory
+5. the built-in default (what the shipped `secret.wild.enc` example uses)
 
 > This is *obfuscation*, not cryptography — a keystream XOR is exactly as strong
 > as keeping the key secret and no stronger. Perfect for a "for fun" esolang;
@@ -198,6 +239,10 @@ grid.
 Faithfulness isn't assumed — the test suite transpiles every example, runs the
 output through `python3`, and asserts it matches the interpreter.
 
+One honest boundary: a program that rewrites its own source with `poke` has no
+static Python equivalent, so the transpiler **refuses it** with a clear error
+rather than emitting code that would silently diverge from the interpreter.
+
 ## Roadmap — the full wild vision
 
 Each item is a layer that slots onto the existing pipeline without reshaping it:
@@ -209,8 +254,12 @@ Each item is a layer that slots onto the existing pipeline without reshaping it:
       walks a character grid; direction-based control flow
 - [x] **Self-modifying code** — the grid's `g`/`p` read and write cells at
       runtime
+- [x] **Cross-zone source rewriting** — `poke` lets one zone rewrite a later
+      zone's source before it runs
 - [x] **Encoded outer layer** — a keyed cipher wrapper so a `.wild` file on disk
       looks like garbage and only this tool (with the key) can decode and run it
+- [x] **Repo-bound keyfile** — a private `.wildkey` you carry between your own
+      repos; without it, encoded programs won't decode
 - [x] **`prose` dialect** — code that reads like English sentences
 - [x] **`lambda` dialect** — a Lisp-like parenthesized surface
 - [x] **Transpiler backend** — emits a self-contained Python program from the
@@ -231,10 +280,12 @@ src/
     lambda.rs    the `lambda` dialect (Lisp S-expressions -> core ops)
   cipher.rs      the encoded outer layer (keyed XOR + base64, no deps)
   transpile.rs   the Python backend (segments -> a runnable Python program)
-  lib.rs         the pipeline (Segment, compile / run / transpile / run_program)
-  main.rs        the `convolution` CLI (run / encode / decode / transpile)
+  lib.rs         the pipeline (Segment, compile / run / transpile / run_program,
+                 per-zone execution for poke, keyfile discovery)
+  main.rs        the `convolution` CLI (run / encode / decode / transpile / keygen)
 examples/        sample .wild programs (+ secret.wild.enc, encoded)
 tests/
   pipeline.rs    end-to-end interpreter tests
   transpile.rs   transpile-then-run-in-python equivalence tests
+  cli.rs         CLI tests, incl. the repo-bound keyfile round-trip
 ```

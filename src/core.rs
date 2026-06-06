@@ -30,6 +30,11 @@ pub enum Op {
     Print,
     /// Pop and print the top as a single Unicode character.
     Emit,
+    /// The one meta-op: pop `c`, `i`, `z` and record an edit that sets character
+    /// `i` of zone `z`'s source to char `c`. The edit is applied between zones by
+    /// the driver, so a zone can rewrite the source of a *later* zone before it
+    /// runs. This is the cross-zone self-modification mechanism.
+    Poke,
 }
 
 /// Something went wrong while executing.
@@ -65,6 +70,7 @@ impl fmt::Display for RuntimeError {
 pub struct Vm {
     stack: Vec<i64>,
     output: String,
+    pending_edits: Vec<(i64, i64, i64)>,
 }
 
 impl Default for Vm {
@@ -78,6 +84,7 @@ impl Vm {
         Vm {
             stack: Vec::new(),
             output: String::new(),
+            pending_edits: Vec::new(),
         }
     }
 
@@ -181,6 +188,12 @@ impl Vm {
                     let a = self.pop_checked(",")?;
                     self.emit_char(a);
                 }
+                Op::Poke => {
+                    let c = self.pop_checked("poke")?;
+                    let i = self.pop_checked("poke")?;
+                    let z = self.pop_checked("poke")?;
+                    self.pending_edits.push((z, i, c));
+                }
             }
         }
         Ok(())
@@ -189,5 +202,12 @@ impl Vm {
     /// Everything the program printed.
     pub fn output(&self) -> &str {
         &self.output
+    }
+
+    /// Take the cross-zone source edits recorded since the last call, clearing
+    /// them. The driver applies these between zones (see [`crate::run_source`]).
+    /// Each entry is `(zone_index, char_offset, char_code)`.
+    pub fn take_edits(&mut self) -> Vec<(i64, i64, i64)> {
+        std::mem::take(&mut self.pending_edits)
     }
 }

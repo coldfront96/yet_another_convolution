@@ -16,6 +16,7 @@
 //! - `(/ a b ...)` left fold (needs at least two args)
 //! - `(print x)` print `x` as a number
 //! - `(emit x)`  print `x` as a character
+//! - `(poke z i c)` rewrite character `i` of a later zone `z` to char `c`
 //! - `;` starts a comment that runs to end of line
 //!
 //! A lambda zone may also leave a value on the stack (no `print`) for a later
@@ -206,6 +207,17 @@ fn apply(op: &str, args: &[Expr], ops: &mut Vec<Op>) -> Result<(), LambdaError> 
         }
         "print" => unary(args, ops, Op::Print, "print"),
         "emit" => unary(args, ops, Op::Emit, "emit"),
+        "poke" => {
+            // (poke zone offset char): rewrite a later zone's source.
+            if args.len() != 3 {
+                return Err(LambdaError::BadArity("poke".to_string()));
+            }
+            for arg in args {
+                emit(arg, ops)?;
+            }
+            ops.push(Op::Poke);
+            Ok(())
+        }
         _ => Err(LambdaError::UnknownOperator(op.to_string())),
     }
 }

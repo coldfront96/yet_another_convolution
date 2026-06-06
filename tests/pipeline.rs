@@ -4,7 +4,9 @@ use convolution::cipher::{self, CipherError};
 use convolution::core::{Op, RuntimeError};
 use convolution::zone::ZoneError;
 use convolution::zones::lambda::LambdaError;
-use convolution::{compile, run_program, run_source, Segment, WildError};
+use convolution::{
+    compile, discover_keyfile, run_program, run_source, Segment, WildError, KEYFILE_NAME,
+};
 
 #[test]
 fn arithmetic_prints_expected() {
@@ -330,4 +332,82 @@ fn unterminated_zone_is_reported() {
 fn negative_literals_push() {
     let out = run_source("{stack -5 -3 + .}").unwrap();
     assert_eq!(out, "-8\n");
+}
+
+// --- Cross-zone source rewriting (poke) -------------------------------------
+
+#[test]
+fn poke_rewrites_a_later_zones_source() {
+    // Zone 0 overwrites the `+` at offset 5 of zone 1's body with `*` (code 42),
+    // so what reads like 6 + 7 = 13 actually prints 42.
+    let out = run_source("{stack 1 5 42 poke}{stack 6 7 + . }").unwrap();
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn poke_via_lambda_rewrites_a_stack_zone() {
+    // (poke 1 1 55): set offset 1 of zone 1's body (` 0 . `) to '7' (code 55).
+    let out = run_source("{lambda (poke 1 1 55)}{stack 0 . }").unwrap();
+    assert_eq!(out, "7\n");
+}
+
+#[test]
+fn poke_to_an_out_of_range_zone_is_ignored() {
+    // Zone 9 doesn't exist, so the edit is silently dropped; zone 1 still runs.
+    let out = run_source("{stack 9 0 42 poke}{stack 5 .}").unwrap();
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn poke_does_not_affect_an_already_running_zone() {
+    // The zone pokes itself (zone 0), but it's already compiled and running, so
+    // the edit lands in nothing observable.
+    let out = run_source("{stack 0 0 42 poke 5 .}").unwrap();
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn poke_compiles_to_the_meta_op() {
+    let segments = compile("{stack 1 2 3 poke}").unwrap();
+    assert_eq!(
+        segments,
+        vec![Segment::Ops(vec![
+            Op::Push(1),
+            Op::Push(2),
+            Op::Push(3),
+            Op::Poke,
+        ])]
+    );
+}
+
+#[test]
+fn poke_with_too_few_args_in_lambda_is_an_error() {
+    let err = run_source("{lambda (poke 1 2)}").unwrap_err();
+    assert_eq!(err, WildError::Lambda(LambdaError::BadArity("poke".into())));
+}
+
+// --- Repo-bound keyfile discovery -------------------------------------------
+
+#[test]
+fn discover_keyfile_walks_up_to_find_the_key() {
+    let base = std::env::temp_dir().join(format!("wildkey_found_{}", std::process::id()));
+    let deep = base.join("a").join("b").join("c");
+    std::fs::create_dir_all(&deep).unwrap();
+    let key = base.join(KEYFILE_NAME);
+    std::fs::write(&key, "secret\n").unwrap();
+
+    let found = discover_keyfile(&deep);
+    assert_eq!(found.as_deref(), Some(key.as_path()));
+
+    std::fs::remove_dir_all(&base).ok();
+}
+
+#[test]
+fn discover_keyfile_returns_none_when_absent() {
+    let base = std::env::temp_dir().join(format!("wildkey_absent_{}", std::process::id()));
+    std::fs::create_dir_all(&base).unwrap();
+    // A unique, keyfile-free subtree: nothing to find until the filesystem root,
+    // which (in any sane test environment) has no .wildkey either.
+    assert_eq!(discover_keyfile(&base), None);
+    std::fs::remove_dir_all(&base).ok();
 }

@@ -109,3 +109,17 @@ fn division_by_zero_is_an_error_in_both() {
     std::fs::remove_file(&path).ok();
     assert!(!output.status.success(), "expected python to fail");
 }
+
+#[test]
+fn transpiler_refuses_self_rewriting_programs() {
+    // A static Python program can't reproduce a program that rewrites its own
+    // source at runtime, so the transpiler must refuse rather than diverge.
+    let source = "{stack 1 5 42 poke}{stack 6 7 + .}";
+    // The interpreter handles it fine...
+    assert_eq!(run_program(source, "k").unwrap(), "42\n");
+    // ...but transpilation is an honest, explicit error.
+    match transpile_program(source, "k") {
+        Err(convolution::WildError::Untranspilable(_)) => {}
+        other => panic!("expected Untranspilable, got {other:?}"),
+    }
+}

@@ -1,8 +1,9 @@
 //! End-to-end tests for the Convolution pipeline.
 
+use convolution::cipher::{self, CipherError};
 use convolution::core::{Op, RuntimeError};
 use convolution::zone::ZoneError;
-use convolution::{compile, run_source, Segment, WildError};
+use convolution::{compile, run_program, run_source, Segment, WildError};
 
 #[test]
 fn arithmetic_prints_expected() {
@@ -87,6 +88,54 @@ fn grid_runaway_hits_step_limit() {
     // No `@`: the IP loops forever and must fail loudly, not hang.
     let err = run_source("{grid\n><\n}").unwrap_err();
     assert_eq!(err, WildError::Runtime(RuntimeError::StepLimit));
+}
+
+// --- encoded outer layer ------------------------------------------------
+
+#[test]
+fn cipher_round_trips() {
+    let source = "{stack 2 3 + dup * . }";
+    let encoded = cipher::encode(source, "hunter2");
+    assert!(cipher::looks_encoded(&encoded));
+    assert_eq!(cipher::decode(&encoded, "hunter2").unwrap(), source);
+}
+
+#[test]
+fn cipher_wrong_key_is_rejected() {
+    let encoded = cipher::encode("{stack 1 .}", "correct-key");
+    assert_eq!(
+        cipher::decode(&encoded, "WRONG"),
+        Err(CipherError::WrongKey)
+    );
+}
+
+#[test]
+fn cipher_missing_magic_is_rejected() {
+    assert_eq!(
+        cipher::decode("just some plaintext", "k"),
+        Err(CipherError::MissingMagic)
+    );
+}
+
+#[test]
+fn run_program_executes_encoded_source() {
+    let encoded = cipher::encode("{stack 6 7 * .}", "s3cret");
+    let out = run_program(&encoded, "s3cret").unwrap();
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn run_program_runs_plaintext_unchanged() {
+    // No magic marker -> treated as plain source regardless of key.
+    let out = run_program("{stack 9 .}", "irrelevant").unwrap();
+    assert_eq!(out, "9\n");
+}
+
+#[test]
+fn run_program_wrong_key_surfaces_cipher_error() {
+    let encoded = cipher::encode("{stack 1 .}", "real");
+    let err = run_program(&encoded, "fake").unwrap_err();
+    assert_eq!(err, WildError::Cipher(CipherError::WrongKey));
 }
 
 #[test]

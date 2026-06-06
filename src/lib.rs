@@ -14,10 +14,12 @@
 //! Future gimmicks (a `prose` dialect, a `lambda` dialect, an outer encoding
 //! layer) bolt onto this same pipeline without changing its shape.
 
+pub mod cipher;
 pub mod core;
 pub mod zone;
 pub mod zones;
 
+use cipher::CipherError;
 use core::{Op, RuntimeError, Vm};
 use std::fmt;
 
@@ -42,6 +44,8 @@ pub enum WildError {
     UnknownDialect { kind: String, line: usize },
     Stack(StackError),
     Runtime(RuntimeError),
+    /// The encoded outer layer failed to decode (e.g. wrong key).
+    Cipher(CipherError),
 }
 
 impl fmt::Display for WildError {
@@ -53,6 +57,7 @@ impl fmt::Display for WildError {
             }
             WildError::Stack(e) => write!(f, "{e}"),
             WildError::Runtime(e) => write!(f, "{e}"),
+            WildError::Cipher(e) => write!(f, "{e}"),
         }
     }
 }
@@ -60,6 +65,11 @@ impl fmt::Display for WildError {
 impl From<ZoneError> for WildError {
     fn from(e: ZoneError) -> Self {
         WildError::Zone(e)
+    }
+}
+impl From<CipherError> for WildError {
+    fn from(e: CipherError) -> Self {
+        WildError::Cipher(e)
     }
 }
 impl From<StackError> for WildError {
@@ -97,7 +107,7 @@ pub fn compile(source: &str) -> Result<Vec<Segment>, WildError> {
     Ok(segments)
 }
 
-/// Compile and run a program, returning everything it printed.
+/// Compile and run plaintext source, returning everything it printed.
 pub fn run_source(source: &str) -> Result<String, WildError> {
     let segments = compile(source)?;
     let mut vm = Vm::new();
@@ -108,4 +118,18 @@ pub fn run_source(source: &str) -> Result<String, WildError> {
         }
     }
     Ok(vm.output().to_string())
+}
+
+/// Run file contents, transparently peeling off the encoded outer layer first.
+///
+/// If `contents` is wrapped (starts with the cipher [`MAGIC`](cipher::MAGIC)
+/// marker) it is decoded with `key`; otherwise it runs as plaintext. This is the
+/// entry point the CLI uses so encoded and plain `.wild` files Just Work.
+pub fn run_program(contents: &str, key: &str) -> Result<String, WildError> {
+    let source = if cipher::looks_encoded(contents) {
+        cipher::decode(contents, key)?
+    } else {
+        contents.to_string()
+    };
+    run_source(&source)
 }

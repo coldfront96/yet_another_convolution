@@ -32,6 +32,7 @@ cargo run -- examples/arithmetic.wild
 cargo run -- examples/hello_grid.wild   # prints: Hello, World!
 cargo run -- examples/grid2d.wild       # a 2D path computing 12
 cargo run -- examples/selfmod.wild      # self-inspecting grid
+cargo run -- examples/secret.wild.enc   # an encoded program, run directly
 cargo test                              # the pipeline test suite
 ```
 
@@ -105,6 +106,38 @@ the zone.)
 Everything lowers to ~11 primitive ops (`Push, Add, Sub, Mul, Div, Dup, Drop,
 Swap, Over, Print, Emit`). New dialects only need to learn how to emit these.
 
+## The encoded outer layer ("only my repos understand it")
+
+A program can be wrapped so that on disk it's opaque base64 garbage. The CLI
+auto-detects the wrapper and decodes it with a key before running, so encoded
+and plain files Just Work:
+
+```sh
+# Wrap a program (writes the encoded form to a .enc file)
+cargo run -- encode examples/hello_grid.wild > examples/secret.wild.enc
+
+# Run it directly -- the CLI peels off the encoding first
+cargo run -- run examples/secret.wild.enc        # -> Hello, World!
+
+# Reveal the original source
+cargo run -- decode examples/secret.wild.enc
+```
+
+The key comes from `--key <KEY>`, else `$CONVOLUTION_KEY`, else a built-in
+default. **Set your own key** to make a program only your tooling (and repos)
+can read:
+
+```sh
+CONVOLUTION_KEY="my-private-key" cargo run -- encode prog.wild > prog.enc
+CONVOLUTION_KEY="my-private-key" cargo run -- run prog.enc
+```
+
+A wrong key fails loudly (an inner tag is checked) rather than running garbage.
+
+> This is *obfuscation*, not cryptography — a keystream XOR is exactly as strong
+> as keeping the key secret and no stronger. Perfect for a "for fun" esolang;
+> don't protect anything that actually matters with it.
+
 ## Roadmap — the full wild vision
 
 Each item is a layer that slots onto the existing pipeline without reshaping it:
@@ -116,9 +149,8 @@ Each item is a layer that slots onto the existing pipeline without reshaping it:
       walks a character grid; direction-based control flow
 - [x] **Self-modifying code** — the grid's `g`/`p` read and write cells at
       runtime
-- [ ] **Encoded outer layer** — a cipher wrapper so a `.wild` file on disk looks
-      like garbage and only this tool can decode and run it ("only my repos
-      understand it")
+- [x] **Encoded outer layer** — a keyed cipher wrapper so a `.wild` file on disk
+      looks like garbage and only this tool (with the key) can decode and run it
 - [ ] **`prose` dialect** — code that reads like English sentences
 - [ ] **`lambda` dialect** — a Lisp-like parenthesized surface
 - [ ] **Transpiler backend** — a second backend that emits Python/JS from the
@@ -134,8 +166,9 @@ src/
     mod.rs       dialect registry
     stack.rs     the `stack` dialect (surface -> core ops)
     grid.rs      the 2D `grid` dialect (its own interpreter)
-  lib.rs         the pipeline (Segment, compile / run_source)
-  main.rs        the `convolution` CLI
-examples/        sample .wild programs
+  cipher.rs      the encoded outer layer (keyed XOR + base64, no deps)
+  lib.rs         the pipeline (Segment, compile / run_source / run_program)
+  main.rs        the `convolution` CLI (run / encode / decode)
+examples/        sample .wild programs (+ secret.wild.enc, encoded)
 tests/           end-to-end pipeline tests
 ```

@@ -4,5 +4,6 @@
 //! as siblings.
 
 pub mod grid;
+pub mod lambda;
 pub mod prose;
 pub mod stack;

@@ -3,6 +3,7 @@
 use convolution::cipher::{self, CipherError};
 use convolution::core::{Op, RuntimeError};
 use convolution::zone::ZoneError;
+use convolution::zones::lambda::LambdaError;
 use convolution::{compile, run_program, run_source, Segment, WildError};
 
 #[test]
@@ -193,6 +194,102 @@ fn prose_shares_stack_with_other_dialects() {
     assert_eq!(out, "42\n");
 }
 
+// --- lambda dialect -----------------------------------------------------
+
+#[test]
+fn lambda_nested_arithmetic() {
+    let out = run_source("{lambda (print (* (+ 1 2) (- 10 3)))}").unwrap();
+    assert_eq!(out, "21\n");
+}
+
+#[test]
+fn lambda_emits_characters() {
+    let out = run_source("{lambda (emit 72) (emit 73)}").unwrap();
+    assert_eq!(out, "HI");
+}
+
+#[test]
+fn lambda_unary_minus_negates() {
+    let out = run_source("{lambda (print (- 5))}").unwrap();
+    assert_eq!(out, "-5\n");
+}
+
+#[test]
+fn lambda_variadic_sum() {
+    let out = run_source("{lambda (print (+ 1 2 3 4))}").unwrap();
+    assert_eq!(out, "10\n");
+}
+
+#[test]
+fn lambda_empty_sum_is_zero() {
+    let out = run_source("{lambda (print (+))}").unwrap();
+    assert_eq!(out, "0\n");
+}
+
+#[test]
+fn lambda_comments_are_ignored() {
+    let out = run_source("{lambda (print 7) ; this is ignored\n}").unwrap();
+    assert_eq!(out, "7\n");
+}
+
+#[test]
+fn lambda_leaves_value_for_next_zone() {
+    // A lambda zone computes 42 without printing; a stack zone then prints it.
+    let out = run_source("{lambda (+ 40 2)} {stack .}").unwrap();
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn lambda_unclosed_paren_is_reported() {
+    let err = run_source("{lambda (+ 1 2}").unwrap_err();
+    assert_eq!(err, WildError::Lambda(LambdaError::UnclosedParen));
+}
+
+#[test]
+fn lambda_unexpected_close_is_reported() {
+    let err = run_source("{lambda )}").unwrap_err();
+    assert_eq!(err, WildError::Lambda(LambdaError::UnexpectedClose));
+}
+
+#[test]
+fn lambda_empty_application_is_reported() {
+    let err = run_source("{lambda ()}").unwrap_err();
+    assert_eq!(err, WildError::Lambda(LambdaError::EmptyApplication));
+}
+
+#[test]
+fn lambda_not_callable_is_reported() {
+    let err = run_source("{lambda (1 2)}").unwrap_err();
+    assert_eq!(err, WildError::Lambda(LambdaError::NotCallable));
+}
+
+#[test]
+fn lambda_bare_symbol_is_reported() {
+    let err = run_source("{lambda +}").unwrap_err();
+    assert_eq!(
+        err,
+        WildError::Lambda(LambdaError::BareSymbol("+".to_string()))
+    );
+}
+
+#[test]
+fn lambda_unknown_operator_is_reported() {
+    let err = run_source("{lambda (frobnicate 1 2)}").unwrap_err();
+    assert_eq!(
+        err,
+        WildError::Lambda(LambdaError::UnknownOperator("frobnicate".to_string()))
+    );
+}
+
+#[test]
+fn lambda_bad_arity_is_reported() {
+    let err = run_source("{lambda (print 1 2)}").unwrap_err();
+    assert_eq!(
+        err,
+        WildError::Lambda(LambdaError::BadArity("print".to_string()))
+    );
+}
+
 #[test]
 fn underflow_is_reported() {
     let err = run_source("{stack +}").unwrap_err();
@@ -216,9 +313,9 @@ fn unknown_word_is_reported() {
 
 #[test]
 fn unknown_dialect_is_reported() {
-    let err = run_source("{lambda (+ 1 2)}").unwrap_err();
+    let err = run_source("{haiku an old silent pond}").unwrap_err();
     match err {
-        WildError::UnknownDialect { kind, .. } => assert_eq!(kind, "lambda"),
+        WildError::UnknownDialect { kind, .. } => assert_eq!(kind, "haiku"),
         other => panic!("expected unknown dialect, got {other:?}"),
     }
 }

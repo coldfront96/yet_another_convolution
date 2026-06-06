@@ -1,0 +1,8 @@
+# Print "HI!" the Lisp way: emit each character code.
+# (Inside the zone, `;` starts a comment.)
+{lambda
+  (emit 72)   ; H
+  (emit 73)   ; I
+  (emit 33)   ; !
+  (emit 10)   ; newline
+}

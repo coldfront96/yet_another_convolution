@@ -25,6 +25,7 @@ use std::fmt;
 
 use zone::ZoneError;
 use zones::grid::Grid;
+use zones::lambda::LambdaError;
 use zones::stack::StackError;
 
 /// One compiled zone. Linear dialects produce [`Segment::Ops`]; the 2D `grid`
@@ -43,6 +44,7 @@ pub enum WildError {
     /// A zone named a dialect we don't have.
     UnknownDialect { kind: String, line: usize },
     Stack(StackError),
+    Lambda(LambdaError),
     Runtime(RuntimeError),
     /// The encoded outer layer failed to decode (e.g. wrong key).
     Cipher(CipherError),
@@ -56,6 +58,7 @@ impl fmt::Display for WildError {
                 write!(f, "error: unknown dialect `{kind}` for zone on line {line}")
             }
             WildError::Stack(e) => write!(f, "{e}"),
+            WildError::Lambda(e) => write!(f, "{e}"),
             WildError::Runtime(e) => write!(f, "{e}"),
             WildError::Cipher(e) => write!(f, "{e}"),
         }
@@ -77,6 +80,11 @@ impl From<StackError> for WildError {
         WildError::Stack(e)
     }
 }
+impl From<LambdaError> for WildError {
+    fn from(e: LambdaError) -> Self {
+        WildError::Lambda(e)
+    }
+}
 impl From<RuntimeError> for WildError {
     fn from(e: RuntimeError) -> Self {
         WildError::Runtime(e)
@@ -96,6 +104,7 @@ pub fn compile(source: &str) -> Result<Vec<Segment>, WildError> {
             "stack" => Segment::Ops(zones::stack::lower(&z.body, z.line)?),
             "grid" => Segment::Grid(Grid::parse(&z.body)),
             "prose" => Segment::Ops(zones::prose::lower(&z.body)),
+            "lambda" => Segment::Ops(zones::lambda::lower(&z.body)?),
             other => {
                 return Err(WildError::UnknownDialect {
                     kind: other.to_string(),

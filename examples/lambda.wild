@@ -1,0 +1,6 @@
+# The `lambda` dialect: a Lisp-like surface of nested S-expressions.
+# Evaluating the tree in post-order is naturally postfix, so it maps straight
+# onto the stack machine. Inside a lambda zone, `;` starts a comment.
+{lambda
+  (print (* (+ 1 2) (- 10 3)))   ; (1+2) * (10-3) = 21
+}

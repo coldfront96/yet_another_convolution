@@ -35,6 +35,8 @@ cargo run -- examples/selfmod.wild      # self-inspecting grid
 cargo run -- examples/secret.wild.enc   # an encoded program, run directly
 cargo run -- examples/prose.wild        # an English sentence that prints 42
 cargo run -- examples/prose_hello.wild  # a short story that prints HI!
+cargo run -- examples/lambda.wild       # nested S-expressions -> 21
+cargo run -- examples/lambda_hello.wild # Lisp that prints HI!
 cargo test                              # the pipeline test suite
 ```
 
@@ -122,6 +124,22 @@ Numbers are spelled out (`forty-two`, `one hundred twenty three`, optionally
 `emit`/`say`/`speak`. **Every other word is narrative filler, ignored on
 purpose** — that's what lets the code read like English.
 
+### The `lambda` dialect (Lisp-like S-expressions)
+
+A parenthesized, nestable surface. Evaluating an expression tree in post-order
+is naturally postfix, so it lowers straight to core ops:
+
+```
+{lambda
+  (print (* (+ 1 2) (- 10 3)))   ; (1+2) * (10-3) = 21
+}
+```
+
+Forms: integer literals push themselves; `(+ ...)` / `(* ...)` / `(- ...)` /
+`(/ ...)` are variadic folds (`(- x)` negates); `(print x)` and `(emit x)`
+output a number or a character; `;` starts a comment. A lambda zone can also
+leave a value on the stack (with no `print`) for a later zone to pick up.
+
 ### The minimalist core
 
 Everything lowers to ~11 primitive ops (`Push, Add, Sub, Mul, Div, Dup, Drop,
@@ -173,7 +191,7 @@ Each item is a layer that slots onto the existing pipeline without reshaping it:
 - [x] **Encoded outer layer** — a keyed cipher wrapper so a `.wild` file on disk
       looks like garbage and only this tool (with the key) can decode and run it
 - [x] **`prose` dialect** — code that reads like English sentences
-- [ ] **`lambda` dialect** — a Lisp-like parenthesized surface
+- [x] **`lambda` dialect** — a Lisp-like parenthesized surface
 - [ ] **Transpiler backend** — a second backend that emits Python/JS from the
       same core ops, instead of interpreting
 
@@ -188,6 +206,7 @@ src/
     stack.rs     the `stack` dialect (surface -> core ops)
     grid.rs      the 2D `grid` dialect (its own interpreter)
     prose.rs     the `prose` dialect (English sentences -> core ops)
+    lambda.rs    the `lambda` dialect (Lisp S-expressions -> core ops)
   cipher.rs      the encoded outer layer (keyed XOR + base64, no deps)
   lib.rs         the pipeline (Segment, compile / run_source / run_program)
   main.rs        the `convolution` CLI (run / encode / decode)

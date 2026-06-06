@@ -1,0 +1,13 @@
+# A second zone shares the same stack as the first, in source order.
+# Here we compute (2 + 3), duplicate it, multiply -> 25, and print it.
+{stack
+  2 3 +     # -> 5
+  dup *     # -> 25
+  .         # print 25
+}
+
+# Then a separate zone leaves a value on the stack and prints it.
+{stack
+  100 7 -   # -> 93
+  .         # print 93
+}

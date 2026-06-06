@@ -1,0 +1,15 @@
+[package]
+name = "convolution"
+version = "0.1.0"
+edition = "2021"
+description = "Convolution: a deliberately baroque, polyglot, multi-zone esolang. The surface is convoluted; the core is tiny."
+
+# A single crate exposing both a library (the language pipeline) and a binary
+# (the `convolution` CLI that runs .wild files).
+[lib]
+name = "convolution"
+path = "src/lib.rs"
+
+[[bin]]
+name = "convolution"
+path = "src/main.rs"

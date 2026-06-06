@@ -1,0 +1,12 @@
+# Your first .wild program.
+#
+# Every {stack ...} is a polyglot zone. Today only the `stack` dialect exists,
+# but the file format is built to mix many dialects in one program later.
+#
+# `,` pops the top of the stack and emits it as a Unicode character.
+{stack
+  72 ,    # H
+  73 ,    # I
+  33 ,    # !
+  10 ,    # newline
+}

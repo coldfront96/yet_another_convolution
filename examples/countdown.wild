@@ -1,0 +1,22 @@
+# A loop that spans THREE zones, steered by `warp` (computed goto across zones).
+#
+# There is no loop syntax. Control just bounces between zones: the grid zone
+# decides, each pass, whether to jump back to the printing zone or fall off the
+# end and halt. The shared stack carries the counter across every hop.
+#
+#   zone 0  push the initial counter (runs once)
+#   zone 1  print the counter, keeping it on the stack
+#   zone 2  a grid: counter -= 1; if it's still > 0, `warp` back to zone 1,
+#           otherwise warp to zone 3 -- which doesn't exist, so the program halts
+#
+# The grid line, left to right:
+#   1-      counter - 1
+#   :0`     dup, push 0, greater-than  ->  (counter > 0) as 1/0
+#   2*3\-   turn that into a warp target: 1 if true (zone 1), 3 if false (halt)
+#   &       warp to that target
+#   @       stop the grid, handing control back to the driver
+{stack 3}
+{stack dup .}
+{grid
+1-:0`2*3\-&@
+}

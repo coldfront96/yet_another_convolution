@@ -30,11 +30,19 @@ pub enum Op {
     Print,
     /// Pop and print the top as a single Unicode character.
     Emit,
-    /// The one meta-op: pop `c`, `i`, `z` and record an edit that sets character
-    /// `i` of zone `z`'s source to char `c`. The edit is applied between zones by
-    /// the driver, so a zone can rewrite the source of a *later* zone before it
-    /// runs. This is the cross-zone self-modification mechanism.
+    /// Source-write meta-op: pop `c`, `i`, `z` and set character `i` of zone
+    /// `z`'s source to char `c`. Lets a zone rewrite a *later* zone before it
+    /// compiles (an edit to an already-run zone is observable only if control
+    /// later returns to it via [`Op::Warp`]).
     Poke,
+    /// Source-read meta-op: pop `i`, `z` and push the character code at offset
+    /// `i` of zone `z`'s source (or `-1` if out of range). The read counterpart
+    /// to [`Op::Poke`].
+    Peek,
+    /// Control meta-op: pop `z`; that zone runs next (a computed goto across
+    /// zones). An out-of-range target halts the program. Combined with `Poke`
+    /// this gives cross-zone loops.
+    Warp,
 }
 
 /// Something went wrong while executing.
@@ -46,6 +54,9 @@ pub enum RuntimeError {
     DivideByZero,
     /// A 2D dialect ran past its step budget (likely a missing `@`).
     StepLimit,
+    /// The whole program ran more zones than allowed — almost always a `warp`
+    /// loop that never reaches an out-of-range target.
+    ZoneStepLimit,
 }
 
 impl fmt::Display for RuntimeError {
@@ -57,6 +68,9 @@ impl fmt::Display for RuntimeError {
             RuntimeError::DivideByZero => write!(f, "runtime error: division by zero"),
             RuntimeError::StepLimit => {
                 write!(f, "runtime error: step limit exceeded (is a grid missing `@`?)")
+            }
+            RuntimeError::ZoneStepLimit => {
+                write!(f, "runtime error: zone step limit exceeded (a `warp` loop that never halts?)")
             }
         }
     }
@@ -70,7 +84,12 @@ impl fmt::Display for RuntimeError {
 pub struct Vm {
     stack: Vec<i64>,
     output: String,
-    pending_edits: Vec<(i64, i64, i64)>,
+    /// The live source of every zone, as character vectors. The self-modifying
+    /// ops (`poke`/`peek`) read and write these, and the driver recompiles a
+    /// zone from its (possibly rewritten) source each time control reaches it.
+    sources: Vec<Vec<char>>,
+    /// A pending computed jump set by `warp`, consumed by the driver.
+    warp: Option<i64>,
 }
 
 impl Default for Vm {
@@ -84,8 +103,66 @@ impl Vm {
         Vm {
             stack: Vec::new(),
             output: String::new(),
-            pending_edits: Vec::new(),
+            sources: Vec::new(),
+            warp: None,
         }
+    }
+
+    // --- Zone source access (the self-modification substrate) -------------
+
+    /// Load the zones' source so the running program can read and rewrite it.
+    pub fn set_sources(&mut self, sources: Vec<Vec<char>>) {
+        self.sources = sources;
+    }
+
+    /// How many zones the program has.
+    pub fn zone_count(&self) -> usize {
+        self.sources.len()
+    }
+
+    /// The current source text of zone `z` (used by the driver to recompile it).
+    pub fn zone_source(&self, z: usize) -> String {
+        self.sources[z].iter().collect()
+    }
+
+    /// Set character `i` of zone `z`'s source to char code `c`. Out-of-range
+    /// targets or non-character codes are ignored. Shared by `Op::Poke` and the
+    /// grid's cross-zone write.
+    pub fn poke_source(&mut self, z: i64, i: i64, c: i64) {
+        if z < 0 || i < 0 {
+            return;
+        }
+        if let Some(body) = self.sources.get_mut(z as usize) {
+            let i = i as usize;
+            if i < body.len() {
+                if let Some(ch) = u32::try_from(c).ok().and_then(char::from_u32) {
+                    body[i] = ch;
+                }
+            }
+        }
+    }
+
+    /// The character code at offset `i` of zone `z`'s source, or `-1` if out of
+    /// range. Shared by `Op::Peek` and the grid's cross-zone read.
+    pub fn peek_source(&self, z: i64, i: i64) -> i64 {
+        if z < 0 || i < 0 {
+            return -1;
+        }
+        self.sources
+            .get(z as usize)
+            .and_then(|body| body.get(i as usize))
+            .map(|c| *c as i64)
+            .unwrap_or(-1)
+    }
+
+    /// Request that zone `z` run next. Shared by `Op::Warp` and the grid's warp.
+    pub fn set_warp(&mut self, z: i64) {
+        self.warp = Some(z);
+    }
+
+    /// Take the pending warp target, if any (consumed by the driver per zone).
+    pub fn take_warp(&mut self) -> Option<i64> {
+        self.warp.take()
     }
 
     // --- Shared primitives, used by every dialect -------------------------
@@ -192,7 +269,17 @@ impl Vm {
                     let c = self.pop_checked("poke")?;
                     let i = self.pop_checked("poke")?;
                     let z = self.pop_checked("poke")?;
-                    self.pending_edits.push((z, i, c));
+                    self.poke_source(z, i, c);
+                }
+                Op::Peek => {
+                    let i = self.pop_checked("peek")?;
+                    let z = self.pop_checked("peek")?;
+                    let code = self.peek_source(z, i);
+                    self.push(code);
+                }
+                Op::Warp => {
+                    let z = self.pop_checked("warp")?;
+                    self.set_warp(z);
                 }
             }
         }
@@ -202,12 +289,5 @@ impl Vm {
     /// Everything the program printed.
     pub fn output(&self) -> &str {
         &self.output
-    }
-
-    /// Take the cross-zone source edits recorded since the last call, clearing
-    /// them. The driver applies these between zones (see [`crate::run_source`]).
-    /// Each entry is `(zone_index, char_offset, char_code)`.
-    pub fn take_edits(&mut self) -> Vec<(i64, i64, i64)> {
-        std::mem::take(&mut self.pending_edits)
     }
 }

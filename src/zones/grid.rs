@@ -28,11 +28,16 @@
 //! - `#`          trampoline: skip the next cell
 //! - `g`          pop y, pop x; push the code of the char at (x, y)
 //! - `p`          pop y, pop x, pop v; write char v into cell (x, y)
+//! - `=`          pop c, i, z; write char c at offset i of *zone z*'s source
+//! - `?`          pop i, z; push the char code at offset i of *zone z*'s source
+//! - `&`          pop z; run zone z next (computed goto across zones)
 //! - `@`          stop
 //! - space        no-op (any unknown char is also a no-op)
 //!
 //! The IP wraps around the edges (the grid is a torus). `}` cannot appear in a
-//! grid body, since it would close the zone.
+//! grid body, since it would close the zone. The `g`/`p` pair self-modifies the
+//! grid's own cells; `=`/`?`/`&` reach *across zones* — the same source-rewriting
+//! and computed-goto powers the linear dialects get from `poke`/`peek`/`warp`.
 
 use crate::core::{RuntimeError, Vm};
 
@@ -94,6 +99,17 @@ impl Grid {
     /// transpiler to embed the grid as data in the generated program.
     pub fn rows(&self) -> Vec<String> {
         self.cells.iter().map(|row| row.iter().collect()).collect()
+    }
+
+    /// Whether any cell holds a cross-zone instruction (`=`/`?`/`&`). Those reach
+    /// into other zones' source, which the static Python backend can't reproduce,
+    /// so the transpiler refuses such grids. This is conservative: a `=`/`?`/`&`
+    /// appearing only as string-mode *data* is still treated as cross-zone.
+    pub fn uses_cross_zone(&self) -> bool {
+        self.cells
+            .iter()
+            .flatten()
+            .any(|c| matches!(c, '=' | '?' | '&'))
     }
 
     /// Run the grid against the shared VM. The grid is copied internally so the
@@ -209,6 +225,24 @@ impl Grid {
                         let xx = vm.pop_or_zero();
                         let v = vm.pop_or_zero();
                         cell_put(&mut cells, xx, yy, w, h, v);
+                    }
+                    // Cross-zone source ops: the grid reaches beyond its own
+                    // cells to read, rewrite, and jump between *other* zones.
+                    '=' => {
+                        let c = vm.pop_or_zero();
+                        let i = vm.pop_or_zero();
+                        let z = vm.pop_or_zero();
+                        vm.poke_source(z, i, c);
+                    }
+                    '?' => {
+                        let i = vm.pop_or_zero();
+                        let z = vm.pop_or_zero();
+                        let code = vm.peek_source(z, i);
+                        vm.push(code);
+                    }
+                    '&' => {
+                        let z = vm.pop_or_zero();
+                        vm.set_warp(z);
                     }
                     '@' => break,
                     _ => {} // space and anything unknown: no-op

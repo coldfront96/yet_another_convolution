@@ -1,0 +1,7 @@
+# `peek` reads the program's own source as data.
+#
+# Zone 0 reads the character at offset 1 of zone 1's body -- the digit `7` -- and
+# prints its character code, 55. Then zone 1 runs normally and prints 7. The very
+# same `7` is seen two ways: as source text (code 55) and as executed code (7).
+{stack 1 1 peek .}
+{stack 7 .}

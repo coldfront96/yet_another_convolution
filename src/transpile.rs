@@ -36,7 +36,8 @@ pub fn to_python(segments: &[Segment]) -> Result<String, WildError> {
             Segment::Ops(ops) => {
                 for op in ops {
                     let lines = op_lines(op).ok_or(WildError::Untranspilable(
-                        "the program rewrites its own source (`poke`)",
+                        "the program reads, rewrites, or jumps across its own source \
+                         (`poke`/`peek`/`warp`)",
                     ))?;
                     for line in lines {
                         out.push_str(&line);
@@ -45,6 +46,11 @@ pub fn to_python(segments: &[Segment]) -> Result<String, WildError> {
                 }
             }
             Segment::Grid(grid) => {
+                if grid.uses_cross_zone() {
+                    return Err(WildError::Untranspilable(
+                        "a grid reaches across zones (`=`/`?`/`&`)",
+                    ));
+                }
                 out.push_str(&grid_call(grid));
                 out.push('\n');
             }
@@ -55,12 +61,12 @@ pub fn to_python(segments: &[Segment]) -> Result<String, WildError> {
 }
 
 /// The Python lines for one linear op, or `None` for an op with no static Python
-/// equivalent (`Poke`). Temporaries `a`/`b` are reused module globals — harmless,
-/// since every op fully consumes them.
+/// equivalent (the self-modifying ops `Poke`/`Peek`/`Warp`). Temporaries `a`/`b`
+/// are reused module globals — harmless, since every op fully consumes them.
 fn op_lines(op: &Op) -> Option<Vec<String>> {
     let lines: &[&str] = match op {
         Op::Push(n) => return Some(vec![format!("_push({n})")]),
-        Op::Poke => return None,
+        Op::Poke | Op::Peek | Op::Warp => return None,
         Op::Add => &["b = _pop()", "a = _pop()", "_push(_w(a + b))"],
         Op::Sub => &["b = _pop()", "a = _pop()", "_push(_w(a - b))"],
         Op::Mul => &["b = _pop()", "a = _pop()", "_push(_w(a * b))"],

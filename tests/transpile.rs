@@ -110,16 +110,26 @@ fn division_by_zero_is_an_error_in_both() {
     assert!(!output.status.success(), "expected python to fail");
 }
 
-#[test]
-fn transpiler_refuses_self_rewriting_programs() {
-    // A static Python program can't reproduce a program that rewrites its own
-    // source at runtime, so the transpiler must refuse rather than diverge.
-    let source = "{stack 1 5 42 poke}{stack 6 7 + .}";
-    // The interpreter handles it fine...
-    assert_eq!(run_program(source, "k").unwrap(), "42\n");
-    // ...but transpilation is an honest, explicit error.
+/// Every self-modifying surface has no faithful static Python form, so the
+/// transpiler must refuse it (rather than emit code that diverges at runtime).
+fn assert_refused(source: &str) {
     match transpile_program(source, "k") {
         Err(convolution::WildError::Untranspilable(_)) => {}
-        other => panic!("expected Untranspilable, got {other:?}"),
+        other => panic!("expected Untranspilable for {source:?}, got {other:?}"),
     }
+}
+
+#[test]
+fn transpiler_refuses_self_rewriting_programs() {
+    // The interpreter handles poke fine...
+    assert_eq!(
+        run_program("{stack 1 5 42 poke}{stack 6 7 + .}", "k").unwrap(),
+        "42\n"
+    );
+    // ...but every cross-zone surface is an honest, explicit transpile error.
+    assert_refused("{stack 1 5 42 poke}{stack 6 7 + .}"); // poke
+    assert_refused("{stack 1 1 peek .}{stack 7 .}"); // peek
+    assert_refused("{stack 2 warp}{stack 9 .}{stack 5 .}"); // warp
+    assert_refused("{lambda (warp 9)}{stack 5 .}"); // warp via lambda
+    assert_refused("{grid\n1567*=@\n}{stack 6 7 + .}"); // grid cross-zone `=`
 }

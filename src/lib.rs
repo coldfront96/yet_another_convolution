@@ -146,43 +146,43 @@ pub fn compile(source: &str) -> Result<Vec<Segment>, WildError> {
         .collect()
 }
 
-/// Apply one recorded edit `(zone, offset, char)` to the mutable zone bodies.
-/// Out-of-range targets are ignored (forgiving). Editing an already-run zone has
-/// no effect, since only zones compiled *after* the edit see it.
-fn apply_edit(bodies: &mut [Vec<char>], z: i64, offset: i64, c: i64) {
-    if z < 0 || offset < 0 {
-        return;
-    }
-    if let Some(body) = bodies.get_mut(z as usize) {
-        let offset = offset as usize;
-        if offset < body.len() {
-            if let Some(ch) = u32::try_from(c).ok().and_then(char::from_u32) {
-                body[offset] = ch;
-            }
-        }
-    }
-}
+/// Upper bound on total zone executions, so a `warp` loop that never reaches an
+/// out-of-range target fails cleanly instead of hanging forever.
+const ZONE_STEP_LIMIT: u64 = 1_000_000;
 
 /// Compile and run plaintext source, returning everything it printed.
 ///
-/// Zones are compiled and run **one at a time** so that a zone's `poke` edits to
-/// a later zone's source land before that zone is compiled. All zones share one
-/// [`Vm`] (stack + output).
+/// Execution is driven by a zone **program counter**, not a straight pass:
+/// `warp` makes a chosen zone run next (a computed goto across zones), and a
+/// zone is recompiled from its current — possibly `poke`-rewritten — source each
+/// time control reaches it. All zones share one [`Vm`] (stack, output, source).
 pub fn run_source(source: &str) -> Result<String, WildError> {
     let zones = zone::split(source)?;
     let kinds: Vec<String> = zones.iter().map(|z| z.kind.clone()).collect();
     let lines: Vec<usize> = zones.iter().map(|z| z.line).collect();
-    let mut bodies: Vec<Vec<char>> = zones.iter().map(|z| z.body.chars().collect()).collect();
+    let sources: Vec<Vec<char>> = zones.iter().map(|z| z.body.chars().collect()).collect();
 
     let mut vm = Vm::new();
-    for i in 0..kinds.len() {
-        let body: String = bodies[i].iter().collect();
-        match compile_zone(&kinds[i], &body, lines[i])? {
+    vm.set_sources(sources);
+    let count = vm.zone_count();
+
+    let mut pc = 0usize;
+    let mut steps = 0u64;
+    while pc < count {
+        steps += 1;
+        if steps > ZONE_STEP_LIMIT {
+            return Err(WildError::Runtime(RuntimeError::ZoneStepLimit));
+        }
+        let body = vm.zone_source(pc);
+        match compile_zone(&kinds[pc], &body, lines[pc])? {
             Segment::Ops(ops) => vm.run_ops(&ops)?,
             Segment::Grid(grid) => grid.run(&mut vm)?,
         }
-        for (z, offset, c) in vm.take_edits() {
-            apply_edit(&mut bodies, z, offset, c);
+        match vm.take_warp() {
+            // A valid target jumps; an out-of-range one halts the program.
+            Some(t) if t >= 0 && (t as usize) < count => pc = t as usize,
+            Some(_) => break,
+            None => pc += 1,
         }
     }
     Ok(vm.output().to_string())

@@ -38,6 +38,8 @@ cargo run -- examples/prose_hello.wild  # a short story that prints HI!
 cargo run -- examples/lambda.wild       # nested S-expressions -> 21
 cargo run -- examples/lambda_hello.wild # Lisp that prints HI!
 cargo run -- examples/selfrewrite.wild  # a zone rewrites a later zone -> 42
+cargo run -- examples/peek.wild         # a zone reads its own source -> 55, 7
+cargo run -- examples/countdown.wild    # a warp loop across zones -> 3, 2, 1
 cargo run -- transpile examples/lambda.wild | python3   # transpile, then run
 cargo test                              # the pipeline test suite
 ```
@@ -60,7 +62,9 @@ Currently the only dialect is `stack` — a Forth/Brainfuck-flavored surface:
 | `over`              | `a b -> a b a`                           |
 | `.`                 | pop and print as a decimal number        |
 | `,`                 | pop and print as a Unicode character     |
-| `poke`              | pop `z i c`; rewrite a *later* zone's source (see below) |
+| `poke`              | pop `z i c`; rewrite character `i` of zone `z`'s source to `c` |
+| `peek`              | pop `z i`; push the character code at offset `i` of zone `z` |
+| `warp`              | pop `z`; run zone `z` next (computed goto across zones) |
 | `# ...`             | comment to end of line                   |
 
 ```
@@ -94,6 +98,9 @@ flattened to linear ops — it runs its own interpreter.
 | `"`             | toggle string mode (push char codes)                |
 | `#`             | trampoline (skip next cell)                          |
 | `g` / `p`       | get / put a cell at runtime — **self-modifying**    |
+| `=`             | pop `c i z`; write char `c` at offset `i` of *zone `z`*'s source |
+| `?`             | pop `i z`; push the char code at offset `i` of *zone `z`* |
+| `&`             | pop `z`; run zone `z` next (computed goto across zones) |
 | `@`             | stop                                                |
 
 ```
@@ -105,8 +112,10 @@ flattened to linear ops — it runs its own interpreter.
 ```
 
 The `g`/`p` instructions read and write the grid *while it runs*, so grids are
-genuinely self-modifying code. (`}` can't appear in a grid body — it would close
-the zone.)
+genuinely self-modifying code. The `=`/`?`/`&` trio reaches *across zones* — the
+same source-rewriting and computed-goto powers the linear dialects get from
+`poke`/`peek`/`warp` (see below). (`}` can't appear in a grid body — it would
+close the zone.)
 
 ### The `prose` dialect (code disguised as English)
 
@@ -140,19 +149,27 @@ is naturally postfix, so it lowers straight to core ops:
 
 Forms: integer literals push themselves; `(+ ...)` / `(* ...)` / `(- ...)` /
 `(/ ...)` are variadic folds (`(- x)` negates); `(print x)` and `(emit x)`
-output a number or a character; `(poke z i c)` rewrites a later zone's source
-(see below); `;` starts a comment. A lambda zone can also leave a value on the
-stack (with no `print`) for a later zone to pick up.
+output a number or a character; `(poke z i c)`, `(peek z i)`, and `(warp z)` are
+the cross-zone self-modification forms (see below); `;` starts a comment. A
+lambda zone can also leave a value on the stack (with no `print`) for a later
+zone to pick up.
 
-### Cross-zone source rewriting (`poke`)
+### Cross-zone self-modification (`poke` / `peek` / `warp`)
 
-The grid's `g`/`p` let a zone rewrite *itself*. `poke` goes further: it lets one
-zone reach across and rewrite the **source text of a later zone before it runs**.
+The grid's `g`/`p` let a zone rewrite *itself*. Three *meta*-ops go further and
+let a zone reach across the whole program — they're the cursed heart of the
+language, and they all speak the same `(zone, offset, value)` vocabulary:
 
-`poke` pops three values — a zone index `z`, a character offset `i`, and a
-character code `c` — and sets character `i` of zone `z`'s body to `c`. Because
-edits must land *before* the target compiles, the interpreter compiles and runs
-zones **one at a time** rather than all up front.
+- **`poke`** (`z i c`) — set character `i` of zone `z`'s source to `c`. *Write.*
+- **`peek`** (`z i`) — push the character code at offset `i` of zone `z` (or `-1`
+  if out of range). *Read.*
+- **`warp`** (`z`) — make zone `z` run next instead of the following zone. An
+  out-of-range target halts the program. *Computed goto.*
+
+Because edits must land before a target compiles, and because `warp` can send
+control anywhere, the interpreter runs on a zone **program counter**: it compiles
+and runs one zone at a time, recompiling a zone from its current — possibly
+rewritten — source each time control reaches it.
 
 ```
 {stack 1 5 42 poke}   # write '*' (code 42) over offset 5 of zone 1's body
@@ -160,15 +177,25 @@ zones **one at a time** rather than all up front.
 ```
 
 The second zone reads like it adds, but the first zone rewrote its `+` into a
-`*` first. Edits to an already-run zone, or to an out-of-range zone, are
-silently ignored — only zones not yet compiled can be changed. (`poke` is the
-one *meta*-op; it manipulates source, not the stack's values.)
+`*` first. With `warp` you get control flow with *no loop syntax at all* — zones
+just bounce between each other, and the shared stack carries state across hops:
+
+```
+{stack 3}             # counter (runs once)
+{stack dup .}         # print the counter, keep it
+{grid                 # decrement; if still > 0 warp back to zone 1, else halt
+1-:0`2*3\-&@
+}                     # -> 3, 2, 1
+```
+
+(There's no guaranteed halting here, by design — an endless `warp` loop fails
+cleanly with a *zone step limit* error rather than hanging.)
 
 ### The minimalist core
 
-Everything lowers to ~12 primitive ops (`Push, Add, Sub, Mul, Div, Dup, Drop,
-Swap, Over, Print, Emit`, plus the meta-op `Poke`). New dialects only need to
-learn how to emit these.
+Everything lowers to ~14 primitive ops (`Push, Add, Sub, Mul, Div, Dup, Drop,
+Swap, Over, Print, Emit`, plus the three self-modifying meta-ops `Poke`, `Peek`,
+`Warp`). New dialects only need to learn how to emit these.
 
 ## The encoded outer layer ("only my repos understand it")
 
@@ -239,9 +266,12 @@ grid.
 Faithfulness isn't assumed — the test suite transpiles every example, runs the
 output through `python3`, and asserts it matches the interpreter.
 
-One honest boundary: a program that rewrites its own source with `poke` has no
-static Python equivalent, so the transpiler **refuses it** with a clear error
-rather than emitting code that would silently diverge from the interpreter.
+One honest boundary: a program that reads, rewrites, or jumps across its own
+source (`poke`/`peek`/`warp`, or a grid's `=`/`?`/`&`) has no static Python
+equivalent, so the transpiler **refuses it** with a clear error rather than
+emitting code that would silently diverge from the interpreter. (The grid check
+is conservative: a grid containing `=`, `?`, or `&` even as string *data* is
+treated as cross-zone.)
 
 ## Roadmap — the full wild vision
 
@@ -254,8 +284,9 @@ Each item is a layer that slots onto the existing pipeline without reshaping it:
       walks a character grid; direction-based control flow
 - [x] **Self-modifying code** — the grid's `g`/`p` read and write cells at
       runtime
-- [x] **Cross-zone source rewriting** — `poke` lets one zone rewrite a later
-      zone's source before it runs
+- [x] **Cross-zone self-modification** — `poke`/`peek`/`warp` (and the grid's
+      `=`/`?`/`&`) let a zone read, rewrite, and jump across the program's own
+      source, driven by a zone program counter
 - [x] **Encoded outer layer** — a keyed cipher wrapper so a `.wild` file on disk
       looks like garbage and only this tool (with the key) can decode and run it
 - [x] **Repo-bound keyfile** — a private `.wildkey` you carry between your own
@@ -270,7 +301,7 @@ Each item is a layer that slots onto the existing pipeline without reshaping it:
 
 ```
 src/
-  core.rs        the minimalist core ops + the shared VM (stack + output)
+  core.rs        the minimalist core ops + the shared VM (stack, output, source)
   zone.rs        the polyglot zone splitter
   zones/
     mod.rs       dialect registry
@@ -281,7 +312,7 @@ src/
   cipher.rs      the encoded outer layer (keyed XOR + base64, no deps)
   transpile.rs   the Python backend (segments -> a runnable Python program)
   lib.rs         the pipeline (Segment, compile / run / transpile / run_program,
-                 per-zone execution for poke, keyfile discovery)
+                 the zone program counter for poke/peek/warp, keyfile discovery)
   main.rs        the `convolution` CLI (run / encode / decode / transpile / keygen)
 examples/        sample .wild programs (+ secret.wild.enc, encoded)
 tests/

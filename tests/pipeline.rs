@@ -411,3 +411,111 @@ fn discover_keyfile_returns_none_when_absent() {
     assert_eq!(discover_keyfile(&base), None);
     std::fs::remove_dir_all(&base).ok();
 }
+
+// --- peek: reading source as data -------------------------------------------
+
+#[test]
+fn peek_reads_a_character_code_from_another_zones_source() {
+    // Zone 1's body is " 7 ."; offset 1 is '7' (code 55). Zone 0 reads it.
+    let out = run_source("{stack 1 1 peek .}{stack 7 .}").unwrap();
+    assert_eq!(out, "55\n7\n");
+}
+
+#[test]
+fn peek_out_of_range_pushes_minus_one() {
+    let out = run_source("{stack 9 9 peek .}").unwrap();
+    assert_eq!(out, "-1\n");
+}
+
+#[test]
+fn peek_via_lambda() {
+    let out = run_source("{lambda (print (peek 1 1))}{stack 7 .}").unwrap();
+    assert_eq!(out, "55\n7\n");
+}
+
+#[test]
+fn peek_compiles_to_the_meta_op() {
+    let segments = compile("{stack 1 2 peek}").unwrap();
+    assert_eq!(
+        segments,
+        vec![Segment::Ops(vec![Op::Push(1), Op::Push(2), Op::Peek])]
+    );
+}
+
+#[test]
+fn peek_with_wrong_arity_in_lambda_is_an_error() {
+    let err = run_source("{lambda (peek 1)}").unwrap_err();
+    assert_eq!(err, WildError::Lambda(LambdaError::BadArity("peek".into())));
+}
+
+// --- warp: computed goto across zones ---------------------------------------
+
+#[test]
+fn warp_jumps_forward_skipping_a_zone() {
+    // Zone 0 jumps to zone 2; zone 1 never runs.
+    let out = run_source("{stack 2 warp}{stack 99 .}{stack 5 .}").unwrap();
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn warp_to_an_out_of_range_zone_halts() {
+    let out = run_source("{stack 5 . 7 warp}{stack 99 .}").unwrap();
+    assert_eq!(out, "5\n");
+}
+
+#[test]
+fn warp_compiles_to_the_meta_op() {
+    let segments = compile("{stack 3 warp}").unwrap();
+    assert_eq!(segments, vec![Segment::Ops(vec![Op::Push(3), Op::Warp])]);
+}
+
+#[test]
+fn warp_via_lambda() {
+    let out = run_source("{lambda (print 1) (warp 9)}{stack 5 .}").unwrap();
+    assert_eq!(out, "1\n");
+}
+
+#[test]
+fn warp_with_wrong_arity_in_lambda_is_an_error() {
+    let err = run_source("{lambda (warp 1 2)}").unwrap_err();
+    assert_eq!(err, WildError::Lambda(LambdaError::BadArity("warp".into())));
+}
+
+#[test]
+fn an_endless_warp_loop_hits_the_zone_step_limit() {
+    let err = run_source("{stack 0 warp}").unwrap_err();
+    assert_eq!(err, WildError::Runtime(RuntimeError::ZoneStepLimit));
+}
+
+#[test]
+fn poke_then_warp_reruns_the_target_from_its_rewritten_source() {
+    // Zone 0 rewrites zone 2's '0' (offset 1) into '7', then warps to zone 2,
+    // skipping zone 1. Zone 2 is compiled fresh from its edited source.
+    let out = run_source("{stack 2 1 55 poke 2 warp}{stack 99 .}{stack 0 .}").unwrap();
+    assert_eq!(out, "7\n");
+}
+
+// --- the grid's cross-zone instructions (`=` `?` `&`) ------------------------
+
+#[test]
+fn grid_can_poke_another_zones_source() {
+    // The grid builds (z=1, i=5, c=6*7=42) then `=` rewrites zone 1's '+' to '*'.
+    let out = run_source("{grid\n1567*=@\n}{stack 6 7 + .}").unwrap();
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn grid_can_peek_another_zones_source() {
+    // The grid reads zone 1's offset 1 ('6', code 54) and prints it; zone 1 then
+    // runs (push 6, no output of its own).
+    let out = run_source("{grid\n1 1?.@\n}{stack 6}").unwrap();
+    assert_eq!(out, "54 ");
+}
+
+#[test]
+fn grid_can_warp_to_drive_a_cross_zone_loop() {
+    // The countdown example: a grid zone warps back into a stack zone until a
+    // counter is exhausted. Proves grid `&` + backward jump + loop + shared stack.
+    let source = "{stack 3}{stack dup .}{grid\n1-:0`2*3\\-&@\n}";
+    assert_eq!(run_source(source).unwrap(), "3\n2\n1\n");
+}

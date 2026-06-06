@@ -11,6 +11,8 @@
 //! - `.`              -> print top as a number
 //! - `,`              -> emit top as a character
 //! - `poke`           -> pop `z i c`; rewrite char `i` of a later zone `z` to `c`
+//! - `peek`           -> pop `z i`; push char code at offset `i` of zone `z`
+//! - `warp`           -> pop `z`; run zone `z` next (computed goto across zones)
 //! - `#` starts a comment that runs to end of line
 
 use crate::core::Op;
@@ -61,6 +63,8 @@ pub fn lower(body: &str, line_base: usize) -> Result<Vec<Op>, StackError> {
                 "." => Op::Print,
                 "," => Op::Emit,
                 "poke" => Op::Poke,
+                "peek" => Op::Peek,
+                "warp" => Op::Warp,
                 _ => match word.parse::<i64>() {
                     Ok(n) => Op::Push(n),
                     Err(_) => {

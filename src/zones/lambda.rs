@@ -17,6 +17,8 @@
 //! - `(print x)` print `x` as a number
 //! - `(emit x)`  print `x` as a character
 //! - `(poke z i c)` rewrite character `i` of a later zone `z` to char `c`
+//! - `(peek z i)` push the character code at offset `i` of zone `z`
+//! - `(warp z)` run zone `z` next (computed goto across zones)
 //! - `;` starts a comment that runs to end of line
 //!
 //! A lambda zone may also leave a value on the stack (no `print`) for a later
@@ -207,19 +209,24 @@ fn apply(op: &str, args: &[Expr], ops: &mut Vec<Op>) -> Result<(), LambdaError> 
         }
         "print" => unary(args, ops, Op::Print, "print"),
         "emit" => unary(args, ops, Op::Emit, "emit"),
-        "poke" => {
-            // (poke zone offset char): rewrite a later zone's source.
-            if args.len() != 3 {
-                return Err(LambdaError::BadArity("poke".to_string()));
-            }
-            for arg in args {
-                emit(arg, ops)?;
-            }
-            ops.push(Op::Poke);
-            Ok(())
-        }
+        // Self-modifying forms: evaluate the operands left-to-right, then apply.
+        "poke" => nary(args, ops, Op::Poke, "poke", 3),
+        "peek" => nary(args, ops, Op::Peek, "peek", 2),
+        "warp" => unary(args, ops, Op::Warp, "warp"),
         _ => Err(LambdaError::UnknownOperator(op.to_string())),
     }
+}
+
+/// A fixed-arity form: evaluate all `n` arguments in order, then apply `op`.
+fn nary(args: &[Expr], ops: &mut Vec<Op>, op: Op, name: &str, n: usize) -> Result<(), LambdaError> {
+    if args.len() != n {
+        return Err(LambdaError::BadArity(name.to_string()));
+    }
+    for arg in args {
+        emit(arg, ops)?;
+    }
+    ops.push(op);
+    Ok(())
 }
 
 /// Variadic fold with an identity for the zero-argument case.

@@ -1,14 +1,15 @@
 //! The minimalist core.
 //!
-//! No matter how baroque a zone's surface syntax becomes, every zone lowers to
-//! this tiny instruction set. The whole point of Convolution is that the surface
-//! is wild and the soul is small: get this layer right and every future gimmick
-//! (2D grids, prose, self-modification, encoding) only has to learn how to emit
-//! these handful of ops.
+//! No matter how baroque a dialect's surface syntax becomes, it ultimately
+//! drives this tiny machine. Linear dialects (like `stack`) compile to a flat
+//! list of [`Op`]s; richer dialects (like the 2D `grid`) run their own
+//! interpreter but operate on this same [`Vm`] — the same shared stack and the
+//! same output buffer. That shared substrate is what makes the language truly
+//! polyglot instead of a pile of unrelated mini-languages.
 
 use std::fmt;
 
-/// A core instruction. This is the universal target every zone compiles down to.
+/// A core instruction — the universal target the linear dialects compile to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
     /// Push a literal integer onto the stack.
@@ -31,13 +32,15 @@ pub enum Op {
     Emit,
 }
 
-/// Something went wrong while executing core ops.
+/// Something went wrong while executing.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RuntimeError {
-    /// An op needed more values than the stack held. Carries the offending word.
+    /// A linear op needed more values than the stack held. Carries the word.
     StackUnderflow(&'static str),
-    /// Division by zero.
+    /// Division by zero in a linear op.
     DivideByZero,
+    /// A 2D dialect ran past its step budget (likely a missing `@`).
+    StepLimit,
 }
 
 impl fmt::Display for RuntimeError {
@@ -47,14 +50,18 @@ impl fmt::Display for RuntimeError {
                 write!(f, "runtime error: stack underflow at `{op}`")
             }
             RuntimeError::DivideByZero => write!(f, "runtime error: division by zero"),
+            RuntimeError::StepLimit => {
+                write!(f, "runtime error: step limit exceeded (is a grid missing `@`?)")
+            }
         }
     }
 }
 
-/// A tiny stack machine that executes a flat list of core [`Op`]s.
+/// The shared machine: one stack, one output buffer.
 ///
 /// Output is captured into a buffer rather than written to stdout directly, so
-/// the whole pipeline stays testable.
+/// the whole pipeline stays testable. Every dialect, linear or 2D, pushes and
+/// pops through these methods.
 pub struct Vm {
     stack: Vec<i64>,
     output: String,
@@ -74,74 +81,105 @@ impl Vm {
         }
     }
 
-    fn pop(&mut self, who: &'static str) -> Result<i64, RuntimeError> {
+    // --- Shared primitives, used by every dialect -------------------------
+
+    /// Push a value.
+    pub fn push(&mut self, n: i64) {
+        self.stack.push(n);
+    }
+
+    /// Pop a value, or `0` if the stack is empty. This is the forgiving,
+    /// Befunge-style pop that 2D dialects use.
+    pub fn pop_or_zero(&mut self) -> i64 {
+        self.stack.pop().unwrap_or(0)
+    }
+
+    /// Append a number followed by a newline to the output (the `stack`
+    /// dialect's print convention).
+    pub fn print_line(&mut self, n: i64) {
+        self.output.push_str(&n.to_string());
+        self.output.push('\n');
+    }
+
+    /// Append raw text to the output (used by dialects with their own print
+    /// formatting, e.g. the grid's number-then-space convention).
+    pub fn write_str(&mut self, s: &str) {
+        self.output.push_str(s);
+    }
+
+    /// Append `n` interpreted as a single Unicode character. Out-of-range code
+    /// points become the replacement char rather than aborting.
+    pub fn emit_char(&mut self, n: i64) {
+        let c = u32::try_from(n)
+            .ok()
+            .and_then(char::from_u32)
+            .unwrap_or('\u{FFFD}');
+        self.output.push(c);
+    }
+
+    // --- Linear op execution ---------------------------------------------
+
+    fn pop_checked(&mut self, who: &'static str) -> Result<i64, RuntimeError> {
         self.stack.pop().ok_or(RuntimeError::StackUnderflow(who))
     }
 
-    /// Execute every op in order. Arithmetic wraps rather than panicking, because
-    /// a "for fun" language should be hard to crash by accident.
-    pub fn run(&mut self, program: &[Op]) -> Result<(), RuntimeError> {
+    /// Execute a flat list of core ops in order. Arithmetic wraps rather than
+    /// panicking, because a "for fun" language should be hard to crash.
+    pub fn run_ops(&mut self, program: &[Op]) -> Result<(), RuntimeError> {
         for op in program {
             match op {
-                Op::Push(n) => self.stack.push(*n),
+                Op::Push(n) => self.push(*n),
                 Op::Add => {
-                    let b = self.pop("+")?;
-                    let a = self.pop("+")?;
-                    self.stack.push(a.wrapping_add(b));
+                    let b = self.pop_checked("+")?;
+                    let a = self.pop_checked("+")?;
+                    self.push(a.wrapping_add(b));
                 }
                 Op::Sub => {
-                    let b = self.pop("-")?;
-                    let a = self.pop("-")?;
-                    self.stack.push(a.wrapping_sub(b));
+                    let b = self.pop_checked("-")?;
+                    let a = self.pop_checked("-")?;
+                    self.push(a.wrapping_sub(b));
                 }
                 Op::Mul => {
-                    let b = self.pop("*")?;
-                    let a = self.pop("*")?;
-                    self.stack.push(a.wrapping_mul(b));
+                    let b = self.pop_checked("*")?;
+                    let a = self.pop_checked("*")?;
+                    self.push(a.wrapping_mul(b));
                 }
                 Op::Div => {
-                    let b = self.pop("/")?;
-                    let a = self.pop("/")?;
+                    let b = self.pop_checked("/")?;
+                    let a = self.pop_checked("/")?;
                     if b == 0 {
                         return Err(RuntimeError::DivideByZero);
                     }
-                    self.stack.push(a.wrapping_div(b));
+                    self.push(a.wrapping_div(b));
                 }
                 Op::Dup => {
-                    let a = self.pop("dup")?;
-                    self.stack.push(a);
-                    self.stack.push(a);
+                    let a = self.pop_checked("dup")?;
+                    self.push(a);
+                    self.push(a);
                 }
                 Op::Drop => {
-                    self.pop("drop")?;
+                    self.pop_checked("drop")?;
                 }
                 Op::Swap => {
-                    let b = self.pop("swap")?;
-                    let a = self.pop("swap")?;
-                    self.stack.push(b);
-                    self.stack.push(a);
+                    let b = self.pop_checked("swap")?;
+                    let a = self.pop_checked("swap")?;
+                    self.push(b);
+                    self.push(a);
                 }
                 Op::Over => {
-                    let b = self.pop("over")?;
-                    let a = self.pop("over")?;
-                    self.stack.push(a);
-                    self.stack.push(b);
-                    self.stack.push(a);
+                    let b = self.pop_checked("over")?;
+                    let a = self.pop_checked("over")?;
+                    self.push(a);
+                    self.push(b);
+                    self.push(a);
                 }
                 Op::Print => {
-                    let a = self.pop(".")?;
-                    self.output.push_str(&a.to_string());
-                    self.output.push('\n');
+                    let a = self.pop_checked(".")?;
+                    self.print_line(a);
                 }
                 Op::Emit => {
-                    let a = self.pop(",")?;
-                    // Out-of-range code points become the replacement char rather
-                    // than aborting the program.
-                    let c = u32::try_from(a)
-                        .ok()
-                        .and_then(char::from_u32)
-                        .unwrap_or('\u{FFFD}');
-                    self.output.push(c);
+                    let a = self.pop_checked(",")?;
+                    self.emit_char(a);
                 }
             }
         }

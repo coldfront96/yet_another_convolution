@@ -1,0 +1,8 @@
+# The 2D `grid` dialect (Befunge-flavored).
+#
+# The instruction pointer starts top-left moving right. `"` enters string mode,
+# pushing each character's code until the next `"`. The string is written
+# REVERSED so that popping it with `,` prints in the right order. `@` stops.
+{grid
+>"!dlroW ,olleH",,,,,,,,,,,,,@
+}

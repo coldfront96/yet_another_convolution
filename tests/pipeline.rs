@@ -2,7 +2,7 @@
 
 use convolution::core::{Op, RuntimeError};
 use convolution::zone::ZoneError;
-use convolution::{compile, run_source, WildError};
+use convolution::{compile, run_source, Segment, WildError};
 
 #[test]
 fn arithmetic_prints_expected() {
@@ -35,8 +35,58 @@ fn stack_shuffles() {
     let program = compile("{stack 3 4 over}").unwrap();
     assert_eq!(
         program,
-        vec![Op::Push(3), Op::Push(4), Op::Over]
+        vec![Segment::Ops(vec![Op::Push(3), Op::Push(4), Op::Over])]
     );
+}
+
+// --- grid dialect -------------------------------------------------------
+
+#[test]
+fn grid_string_mode_prints_in_order() {
+    // Push 'I' then 'H'; two commas pop H then I -> "HI".
+    let out = run_source("{grid\n>\"IH\",,@\n}").unwrap();
+    assert_eq!(out, "HI");
+}
+
+#[test]
+fn grid_hello_world() {
+    let out = run_source("{grid\n>\"!dlroW ,olleH\",,,,,,,,,,,,,@\n}").unwrap();
+    assert_eq!(out, "Hello, World!");
+}
+
+#[test]
+fn grid_direction_change_does_arithmetic() {
+    // Walk right computing 3*4, turn down at `v`, print -> "12 ".
+    let out = run_source("{grid\n>34*v\n    .\n    @\n}").unwrap();
+    assert_eq!(out, "12 ");
+}
+
+#[test]
+fn grid_self_modification_with_p_and_g() {
+    // Put char 9 into cell (0,0), then read it back and print -> "9 ".
+    let out = run_source("{grid\n>900p00g.@\n}").unwrap();
+    assert_eq!(out, "9 ");
+}
+
+#[test]
+fn grid_get_reads_own_source() {
+    // `g` of (0,0) reads the '>' cell, whose code is 62.
+    let out = run_source("{grid\n>00g.@\n}").unwrap();
+    assert_eq!(out, "62 ");
+}
+
+#[test]
+fn grid_and_stack_share_one_stack() {
+    // A stack zone leaves 5; a following grid zone adds 4 and prints -> "9 ".
+    let out = run_source("{stack 5} {grid\n>4+.@\n}").unwrap();
+    assert_eq!(out, "9 ");
+}
+
+#[test]
+fn grid_runaway_hits_step_limit() {
+    // No `@`: the IP loops forever and must fail loudly, not hang.
+    let err = run_source("{grid\n><\n}").unwrap_err();
+    assert_eq!(err, WildError::Runtime(RuntimeError::StepLimit));
 }
 
 #[test]
@@ -62,9 +112,9 @@ fn unknown_word_is_reported() {
 
 #[test]
 fn unknown_dialect_is_reported() {
-    let err = run_source("{grid > v <}").unwrap_err();
+    let err = run_source("{prose once upon a time}").unwrap_err();
     match err {
-        WildError::UnknownDialect { kind, .. } => assert_eq!(kind, "grid"),
+        WildError::UnknownDialect { kind, .. } => assert_eq!(kind, "prose"),
         other => panic!("expected unknown dialect, got {other:?}"),
     }
 }

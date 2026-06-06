@@ -1,0 +1,9 @@
+# A genuinely 2D path: the instruction pointer turns corners.
+#
+# It walks RIGHT computing 3 * 4 = 12, hits `v` and turns DOWN, lands on `.`
+# which prints the number (followed by a space), then `@` stops.
+{grid
+>34*v
+    .
+    @
+}

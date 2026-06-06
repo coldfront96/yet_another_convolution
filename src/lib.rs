@@ -5,25 +5,34 @@
 //! ```text
 //! source (.wild)
 //!   -> zone::split        carve into polyglot zones
-//!   -> <dialect>::lower   each zone -> core ops
-//!   -> core::Vm::run      execute the flat op stream
+//!   -> <dialect> compile  each zone -> a Segment (linear ops or a grid)
+//!   -> core::Vm           run every segment on one shared stack + output
 //!   -> output string
 //! ```
 //!
 //! The surface is convoluted on purpose; the core it all reduces to is tiny.
-//! Future gimmicks (a 2D `grid` dialect, a `prose` dialect, self-modifying
-//! zones, an outer encoding layer) bolt onto this same pipeline without
-//! changing its shape.
+//! Future gimmicks (a `prose` dialect, a `lambda` dialect, an outer encoding
+//! layer) bolt onto this same pipeline without changing its shape.
 
 pub mod core;
 pub mod zone;
 pub mod zones;
 
-use core::{RuntimeError, Vm};
+use core::{Op, RuntimeError, Vm};
 use std::fmt;
 
 use zone::ZoneError;
+use zones::grid::Grid;
 use zones::stack::StackError;
+
+/// One compiled zone. Linear dialects produce [`Segment::Ops`]; the 2D `grid`
+/// dialect produces [`Segment::Grid`], which carries its own interpreter. Both
+/// run against the same shared [`Vm`], in source order.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Segment {
+    Ops(Vec<Op>),
+    Grid(Grid),
+}
 
 /// Any failure across the whole pipeline.
 #[derive(Debug, PartialEq, Eq)]
@@ -64,32 +73,39 @@ impl From<RuntimeError> for WildError {
     }
 }
 
-/// Compile a Convolution program down to a flat stream of core ops.
+/// Compile a Convolution program into an ordered list of segments.
 ///
-/// Zones execute in source order and share one stack, so values pushed in an
-/// earlier zone are visible to a later one — that cross-zone flow is what will
-/// eventually let different dialects talk to each other.
-pub fn compile(source: &str) -> Result<Vec<core::Op>, WildError> {
+/// Segments execute in source order and share one stack, so values pushed in an
+/// earlier zone (even a different dialect) are visible to a later one — that
+/// cross-zone flow is what lets the dialects genuinely talk to each other.
+pub fn compile(source: &str) -> Result<Vec<Segment>, WildError> {
     let zones = zone::split(source)?;
-    let mut program = Vec::new();
+    let mut segments = Vec::new();
     for z in zones {
-        match z.kind.as_str() {
-            "stack" => program.extend(zones::stack::lower(&z.body, z.line)?),
+        let segment = match z.kind.as_str() {
+            "stack" => Segment::Ops(zones::stack::lower(&z.body, z.line)?),
+            "grid" => Segment::Grid(Grid::parse(&z.body)),
             other => {
                 return Err(WildError::UnknownDialect {
                     kind: other.to_string(),
                     line: z.line,
                 })
             }
-        }
+        };
+        segments.push(segment);
     }
-    Ok(program)
+    Ok(segments)
 }
 
 /// Compile and run a program, returning everything it printed.
 pub fn run_source(source: &str) -> Result<String, WildError> {
-    let program = compile(source)?;
+    let segments = compile(source)?;
     let mut vm = Vm::new();
-    vm.run(&program)?;
+    for segment in &segments {
+        match segment {
+            Segment::Ops(ops) => vm.run_ops(ops)?,
+            Segment::Grid(grid) => grid.run(&mut vm)?,
+        }
+    }
     Ok(vm.output().to_string())
 }

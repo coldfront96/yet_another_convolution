@@ -1,5 +1,7 @@
-//! Dialects. Each submodule is one borrowed language that lowers to core ops.
-//! New gimmicks (2D `grid`, `prose`, `lambda`, self-modifying zones) get added
-//! here as siblings of `stack`.
+//! Dialects. Each submodule is one borrowed language that drives the shared VM.
+//! Linear dialects (`stack`) compile to core ops; richer dialects (`grid`) run
+//! their own interpreter. New gimmicks (`prose`, `lambda`, ...) get added here
+//! as siblings.
 
+pub mod grid;
 pub mod stack;

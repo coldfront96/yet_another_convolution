@@ -13,19 +13,26 @@ this same pipeline.
 ```text
 source (.wild)
   -> zone::split        carve the program into polyglot zones
-  -> <dialect>::lower   each zone compiles to core ops
-  -> core::Vm::run      execute the flat op stream on a shared stack
+  -> <dialect> compile  each zone -> a Segment (linear ops, or a 2D grid)
+  -> core::Vm           run every segment on one shared stack + output
   -> output
 ```
 
 Convoluted to *use*, clean to *build* — each stage is independently testable.
+Linear dialects (`stack`) compile to a flat list of core ops; richer dialects
+(`grid`) carry their own interpreter — but every dialect drives the **same
+shared stack and output buffer**, which is what makes the language genuinely
+polyglot instead of a pile of unrelated mini-languages.
 
 ## Run it
 
 ```sh
-cargo run -- examples/hello.wild     # prints: HI!
+cargo run -- examples/hello.wild        # prints: HI!
 cargo run -- examples/arithmetic.wild
-cargo test                           # the pipeline test suite
+cargo run -- examples/hello_grid.wild   # prints: Hello, World!
+cargo run -- examples/grid2d.wild       # a 2D path computing 12
+cargo run -- examples/selfmod.wild      # self-inspecting grid
+cargo test                              # the pipeline test suite
 ```
 
 ## The language today
@@ -56,6 +63,43 @@ Currently the only dialect is `stack` — a Forth/Brainfuck-flavored surface:
 }
 ```
 
+### The `grid` dialect (2D / visual / self-modifying)
+
+A Befunge-flavored 2D dialect. The body is a grid of characters; an instruction
+pointer starts top-left moving right, and each cell it lands on is an
+instruction. `> < ^ v` steer it, `_ |` steer it based on a popped value, and the
+IP wraps around the edges. Because direction is *runtime* state, a grid can't be
+flattened to linear ops — it runs its own interpreter.
+
+| Cell            | Effect                                              |
+| --------------- | --------------------------------------------------- |
+| `0`-`9`         | push that digit                                     |
+| `+ - * / %`     | arithmetic (empty pops as 0; ÷/% by 0 gives 0)      |
+| `!`             | logical not                                         |
+| `` ` ``         | greater-than: `a b -> (a>b)`                         |
+| `> < ^ v`       | set direction                                       |
+| `_`             | pop; right if 0, else left                          |
+| `\|`            | pop; down if 0, else up                              |
+| `: \ $`         | dup / swap / drop                                   |
+| `.`             | pop and print as a number + space                   |
+| `,`             | pop and print as a character                        |
+| `"`             | toggle string mode (push char codes)                |
+| `#`             | trampoline (skip next cell)                          |
+| `g` / `p`       | get / put a cell at runtime — **self-modifying**    |
+| `@`             | stop                                                |
+
+```
+{grid
+>34*v        the IP walks right (3*4=12), turns down at v,
+    .        prints 12, then stops
+    @
+}
+```
+
+The `g`/`p` instructions read and write the grid *while it runs*, so grids are
+genuinely self-modifying code. (`}` can't appear in a grid body — it would close
+the zone.)
+
 ### The minimalist core
 
 Everything lowers to ~11 primitive ops (`Push, Add, Sub, Mul, Div, Dup, Drop,
@@ -68,15 +112,15 @@ Each item is a layer that slots onto the existing pipeline without reshaping it:
 - [x] **Minimalist core** — the tiny op set everything reduces to
 - [x] **Polyglot zones** — one program, many borrowed dialects
 - [x] **`stack` dialect** — the first surface language
-- [ ] **2D / visual `grid` dialect** — a Befunge-style instruction pointer that
+- [x] **2D / visual `grid` dialect** — a Befunge-style instruction pointer that
       walks a character grid; direction-based control flow
-- [ ] **`prose` dialect** — code that reads like English sentences
-- [ ] **`lambda` dialect** — a Lisp-like parenthesized surface
-- [ ] **Self-modifying zones** — operators that rewrite another zone's source
-      before it executes
+- [x] **Self-modifying code** — the grid's `g`/`p` read and write cells at
+      runtime
 - [ ] **Encoded outer layer** — a cipher wrapper so a `.wild` file on disk looks
       like garbage and only this tool can decode and run it ("only my repos
       understand it")
+- [ ] **`prose` dialect** — code that reads like English sentences
+- [ ] **`lambda` dialect** — a Lisp-like parenthesized surface
 - [ ] **Transpiler backend** — a second backend that emits Python/JS from the
       same core ops, instead of interpreting
 
@@ -84,12 +128,13 @@ Each item is a layer that slots onto the existing pipeline without reshaping it:
 
 ```
 src/
-  core.rs        the minimalist core ops + the stack VM
+  core.rs        the minimalist core ops + the shared VM (stack + output)
   zone.rs        the polyglot zone splitter
   zones/
     mod.rs       dialect registry
     stack.rs     the `stack` dialect (surface -> core ops)
-  lib.rs         the pipeline (compile / run_source)
+    grid.rs      the 2D `grid` dialect (its own interpreter)
+  lib.rs         the pipeline (Segment, compile / run_source)
   main.rs        the `convolution` CLI
 examples/        sample .wild programs
 tests/           end-to-end pipeline tests

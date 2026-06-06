@@ -1,0 +1,7 @@
+# Self-modifying code, for free, via the grid's `g` (get) and `p` (put).
+#
+# `00g` reads the character at cell (0, 0) -- the `>` the IP itself started on,
+# whose code is 62 -- and `.` prints it. The program inspects its own source.
+{grid
+>00g.@
+}
